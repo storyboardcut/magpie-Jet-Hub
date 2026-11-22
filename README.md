@@ -1,6 +1,6 @@
-# magpie-jet-hub
+# magpie-supermarket
 
-[![repo](https://img.shields.io/badge/github-Betsy20/magpie--Jet--Hub-blue)](https://github.com/Betsy20/magpie-Jet-Hub)
+[![repo](https://img.shields.io/badge/github-Betsy20/magpie--Jet--Hub-blue)](https://github.com/Betsy20/magpie-supermarket)
 
 把 **deepseek-harness-codearts 插件本体**装进 magpie。装上之后，magpie 的供应商列表里会多出 31 家 AI 编码渠道，用的是你在 DSH 里已经登录好的那批账号 —— 不需要重新登录，也不需要复制凭据。
 
@@ -63,7 +63,7 @@ magpie plugin add <你 clone 下来的那个目录>
 ```
 
 > ⚠️ **必须用目录路径，不要写包名**。这个包名不在 npm 上（`npm view` 直接 404），
-> `magpie plugin add magpie-jet-hub` 只会失败，或者拿到名字相近的别人的包（表现为 `TypeError: undefined is not an object (evaluating 'self.ctx.reflect.provide')`）。
+> `magpie plugin add magpie-supermarket` 只会失败，或者拿到名字相近的别人的包（表现为 `TypeError: undefined is not an object (evaluating 'self.ctx.reflect.provide')`）。
 >
 > 目录式安装是**直接引用**（不复制、不建软链），所以 `magpie plugin list` 里能看到的就是你改的那份目录。
 > 但 magpie **不热重载插件**：改了 `src/` 或 `vendor/` 之后必须重新登录该供应商或重启 magpie，改动才生效。
@@ -73,8 +73,8 @@ magpie plugin add <你 clone 下来的那个目录>
 `git clone` 下来的目录没有 `node_modules`（`.gitignore` 里就写着），而 magpie 的目录式安装**不会替你装依赖**，所以必须先自己装一次：
 
 ```bash
-git clone https://github.com/Betsy20/magpie-Jet-Hub.git
-cd magpie-Jet-Hub
+git clone https://github.com/Betsy20/magpie-supermarket.git
+cd magpie-supermarket
 npm install          # 必须；跳过这步插件会在加载时崩，控制台也就不会出现
 magpie plugin add "$PWD"
 ```
@@ -82,7 +82,7 @@ magpie plugin add "$PWD"
 也可以让 magpie 自己装（它用自带的 bun 按 `package.json` 的依赖树装）：
 
 ```bash
-magpie plugin add github:Betsy20/magpie-Jet-Hub
+magpie plugin add github:Betsy20/magpie-supermarket
 ```
 
 装完可以用 `npm ls --depth=0` 对一眼 —— 根 `package.json` 的 `dependencies` 必须覆盖 `vendor/` 里本体 import 的全部第三方包（`jose`、`undici` 这两个漏过，换机一加载就 `ERR_MODULE_NOT_FOUND`，表现为「控制台打不开」）。`tests/t-deps.mjs` 会扫 Node 侧全部源码的 import 守着这条。

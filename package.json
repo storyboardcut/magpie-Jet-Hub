@@ -1,5 +1,5 @@
 {
-  "name": "magpie-jet-hub",
+  "name": "magpie-supermarket",
   "version": "1.0.0",
   "type": "module",
   "description": "把 deepseek-harness-codearts 插件本体（29 个 provider 的路由中枢）原样装进 magpie：内嵌 cordis 容器运行本体，复用其账号池、静默续期、积分选号与本地 OpenAI 兼容网关，凭据直接共用 DSH 的 .credentials.yaml，不依赖 DSH 进程",
