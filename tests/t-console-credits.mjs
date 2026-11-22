@@ -49,17 +49,17 @@ console.log('--- 1) credits.balances 的回包形状 ---')
   // handler 里那两行：`const value = usesWindow ? {...} : {...}` 然后 `return { ok: true, value }`
   const iValue = rpcSrc.indexOf('const value = usesWindow')
   ok(iValue > 0, '找到 credits.balances handler 里的 `const value = usesWindow`')
-  const tail = rpcSrc.slice(iValue, iValue + 2500)
+  // 2026-11-22 同步 098de904：对象里多了一段「磁盘缓存首帧标记」的 JSDoc 与可选的
+  // `fromCache` 摊入，窗口改由 `resolveCreditWindow` 按渠道解析 —— 两者都排到了
+  // 起点之后 ~1000 字符处，截取窗口从 400 放宽到 1400。
+  const tail = rpcSrc.slice(iValue, iValue + 1400)
   ok(
-    (tail.match(/accounts:\s*values/g) ?? []).length >= 2,
-    'value 的两个分支都带 `accounts: values`（对象载荷，不是裸的 values）',
+    /\{\s*accounts:\s*values,/.test(tail),
+    'value 是以 `{ accounts: values,` 开头的对象（不是裸的 values）',
   )
-  // 2026-11-22 跟进上游 1c3775b：窗口计算从 `buddyExpiringWindowDays()` 换成
-  // `resolveCreditWindow(provider, reader)`（per-provider 窗口 + imminentDays 预警，
-  // 上游 src/credit-window.ts），并新增可选 `fromCache` 磁盘缓存标记。钉住新契约：
   ok(
-    /resolveCreditWindow\(req\.provider/.test(tail) && /windowDays:/.test(tail),
-    '带窗口的渠道走 resolveCreditWindow 并带 windowDays（说明 value 是对象而不是数组）',
+    /windowDays:\s*w\.windowDays/.test(tail),
+    '带窗口的渠道额外带 windowDays（说明 value 是对象而不是数组）',
   )
   const iReturn = rpcSrc.indexOf('return { ok: true, value }', iValue)
   ok(iReturn > 0, 'handler 返回 `{ ok: true, value }`')

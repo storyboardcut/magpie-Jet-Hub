@@ -1131,15 +1131,9 @@ console.log('\noauth 方法形状：')
       const noName = DP.filter((p) => !named.has(p))
       ok(noName.length === 0, `NAMES 缺这些 provider 的显示名：${noName.join(', ') || '无'}`)
     }
-    // ④ `FALLBACK_MODELS` 必须每家各至少一条 —— 它是「内存缓存与磁盘缓存都没有时」
+    // ④ `FALLBACK_MODELS` 必须 29 家各至少一条 —— 它是「内存缓存与磁盘缓存都没有时」
     //    的唯一兜底（`currentModels()` 的第 3 档）。漏一家 = 那家第一次启动在 magpie
     //    里一个模型都看不到，且没有任何报错。此前这张表长期只有 16 条、且缺 magicrew。
-    //    豁免：上游**刻意留空**兜底表的 provider（2026-11-22 跟进 1c3775b 时
-    //    agnescode 双子：目录只有远端账号级一个来源，上游红线「静态兜底表必然腐坏，
-    //    不接受按印象编 id」⇒ `AGNESCODE_FALLBACK_MODELS = Object.freeze([])`）。
-    //    给它们编兜底条目 = 违上游红线；放行空缺 = 没账号时那家目录本来就隐藏
-    //    （`providerCatalogVisible()` + `DSH_HIDE_MODELS_WITHOUT_ACCOUNT` 默认开）。
-    const EMPTY_FALLBACK_OK = new Set(['agnescode', 'agnescodeintl'])
     const fbStart = pluginSrc.indexOf('const FALLBACK_MODELS = {')
     const fbEnd = fbStart > 0 ? pluginSrc.indexOf(String.fromCharCode(10) + '}', fbStart) : -1
     ok(fbStart > 0 && fbEnd > fbStart, '能从 src/plugin.mjs 里切出 FALLBACK_MODELS 表')
@@ -1148,7 +1142,7 @@ console.log('\noauth 方法形状：')
       const fbProviders = new Set(
         [...fbBody.matchAll(/^\s+'?([a-zA-Z0-9_-]+)\//gm)].map((m) => m[1]),
       )
-      const noFallback = DP.filter((p) => !fbProviders.has(p) && !EMPTY_FALLBACK_OK.has(p))
+      const noFallback = DP.filter((p) => !fbProviders.has(p))
       ok(noFallback.length === 0, `FALLBACK_MODELS 缺这些 provider 的兜底模型：${noFallback.join(', ') || '无'}`)
       // ⑤ 兜底表的 model id 必须真在**最近一次快照**里 —— 只查 provider 前缀抓不到
       //    「那一条点不通」（2026-10-30 四审实测：25 条里有 3 条 id 上游早已删掉，
@@ -1176,7 +1170,14 @@ console.log('\noauth 方法形状：')
       // 2026-11-10：同步上游 `1d12f80`（接腾讯 Marvis）后重跑快照，29 家全部拿到
       // 目录 —— `magicrew` / `magicrewintl` 的凭据已恢复（上一版白名单里那两条就是
       // 等这一天，反向锚点如约变红），`marvis` 的 `main-auto` 也在。再次清空。
-      const SNAPSHOT_MISSING = new Map()
+      // 2026-11-22：同步上游 `098de904`（新增 AgnesCode 两站 `agnescode` / `agnescodeintl`，
+      // FALLBACK 也各加了一条）。`page/models.js` 快照还是旧宿主生成的 —— 装进 magpie、
+      // 重启宿主后重跑 `node scripts/snapshot-models.mjs`，届时删掉这两条
+      // （下面的反向锚点会红着提醒）。
+      const SNAPSHOT_MISSING = new Map([
+        ['jet-hub-agnescode', '2026-11-22 上游新增两站，快照待宿主重载后重跑（重跑后删本条）'],
+        ['jet-hub-agnescodeintl', '2026-11-22 上游新增两站，快照待宿主重载后重跑（重跑后删本条）'],
+      ])
       const expectProvs = [...new Set(fbIds.map((id) => `jet-hub-${id.split('/')[0]}`))]
       ok(expectProvs.length >= 20, `FALLBACK 应覆盖 20+ 家，实际 ${expectProvs.length}`)
       for (const [p, why] of SNAPSHOT_MISSING) {

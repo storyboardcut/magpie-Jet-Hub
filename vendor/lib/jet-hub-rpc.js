@@ -9811,9 +9811,27 @@ function registerJetHubEndpoints(ctx, pool, auths, modelAdapters) {
                         && catalog.ids.length > 0
                         && catalog.ids.every((id) => after[id] === true);
                     if (coversAll) {
-                        await pool.writeModelsWithProviderClosed(req.provider, ids, true);
+                        // ⚠️ 本仓改动（2026-11-05）：第三参是「**目标意图**」，**不要**写死 `true`。
+                        //
+                        // `closeProvider: false` 是模型列表屏传的，语义是「只关这家的模型、
+                        // 供应商保持打开」⇒ 对应 `writeModelsWithProviderClosed` 的三态
+                        // `'keep'`（**不动** `providerClosed` 那个键）。
+                        //
+                        // ⚠️ 不能直接传 `false`：`false` 的实现是
+                        // `delete providerClosed[provider]`，会**主动删掉**用户先前用
+                        // 「关闭供应商」设下的意图 —— 与「不动」是两回事（2026-11-04 真机
+                        // 报障：「更新插件后停用的供应商被启用了」，见 `writeModelsWithProviderClosed`
+                        // 里 `'keep'` 那一态的注释）。
+                        //
+                        // ⚠️ 与 `setAllDisabled` 的 `closeProvider` 同一条契约：两个入口写的是
+                        // 同一张黑名单，不给这条就会出现「同一份黑名单状态经两个入口得到不同
+                        // 意图」，随后打开任意模型时又被清掉，状态反向跳变。
+                        const closeProvider = req.closeProvider !== false;
+                        await pool.writeModelsWithProviderClosed(req.provider, ids, closeProvider ? true : 'keep');
                         ctx.logger.info(`[jet-hub] ${req.provider} 的黑名单已覆盖全量目录（${catalog.ids.length} 个），`
-                            + '同时落「供应商关闭」意图');
+                            + (closeProvider
+                                ? '同时落「供应商关闭」意图'
+                                : '不动「供应商关闭」意图（closeProvider: false）'));
                     }
                     else {
                         await pool.setModelsDisabled(req.provider, ids);

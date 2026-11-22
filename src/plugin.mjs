@@ -133,9 +133,9 @@ export const DISPLAY_NAME = 'Jet Hub'
  */
 export const DSH_PROVIDERS = [
   'accio',
-  // 2026-11-22 自行跟进上游 1c3775b：上游 11-19 新增 AgnesCode 国内/国际两站
-  // （独立账号体系，同一套实现与图标），注册表序在 marvis 前；这里按本仓
-  // 惯例排字母序（accio < agnescode < agnescodeintl < astudio）。
+  // 2026-11-19 上游新增（本 fork 独有）：AgnesCode 两站（agnes-ai.cn / agnes-ai.com）。
+  // 同一 adapter 两套账号体系，与 minimax/minimaxintl、qoder/qodercn 同构；
+  // 上游 provider-registry 要求 id 纯小写字母，故国际版是 `agnescodeintl`。
   'agnescode',
   'agnescodeintl',
   'astudio',
@@ -146,11 +146,11 @@ export const DSH_PROVIDERS = [
   'cline',
   'codearts',
   'codely',
-  // 2026-11-22 跟进上游 1c3775b：上游注册了豆包（doubao，cookie 鉴权 + CDP 页面签到），
-  // 但注册表明写 **`channel: false`（UI 先行阶段）**—— 签到/积分已接通、模型目录
-  // 完全没有（上游明说避免触发「channel ⇒ 必须有目录」守卫），vendor 的
-  // modelAdapters 表也没有 doubao。按本仓「只接真渠道」口径（与 aggregate /
-  // jet-hub-auto 不注册同理），doubao **暂不接入**；等上游 channel: true 再加。
+  // ⚠️ 上游 2026-11-05 合并进来的 doubao（豆包）**刻意不接**：它只有账号 / 签到 /
+  // 积分（doubao-login / doubao-signin / doubao-credits），没有模型适配器 ——
+  // vendor 的 modelAdapters 表里没有它，接进来就是一张永远空着的卡（与两个路由组
+  // 同理）。哪天上游给它接了 adapter，tests/t-new-account 的「vendor 有的插件必须
+  // 有」会红着提醒把它加回来。
   'gemini',
   'lobsterai',
   'loomy',
@@ -179,8 +179,8 @@ export const DSH_PROVIDERS = [
  */
 const NAMES = {
   accio: 'Accio (阿里)',
-  // 2026-11-22 自行跟进上游 1c3775b：上游 label 是「AgnesCode」，国际版括注区分。
-  agnescode: 'AgnesCode',
+  // 2026-11-19 上游新增 AgnesCode 两站。上游 displayName 是 'AgnesCode' / 'AgnesCode (国际版)'。
+  agnescode: 'AgnesCode (中国版)',
   agnescodeintl: 'AgnesCode (国际版)',
   astudio: 'AStudio (讯飞)',
   autoclaw: 'AutoClaw (智谱)',
@@ -263,6 +263,11 @@ const FALLBACK_MODELS = {
   'autoclawintl/zai_glm-5.3-flash': { name: 'AutoClaw 国际 · GLM-5.3 Flash' },
   'gemini/gemini-3.8-flash': { name: 'Gemini · 3.8 Flash' },
   'accio/glm-5-3-flash': { name: 'Accio · GLM-5.3 Flash' },
+  // 2026-11-19 上游新增 AgnesCode 两站。目录走远端 BFF（带计费倍率），没有静态目录；
+  // 这两条是冷启动兜底，id 取自上游 agnescode-product.ts 注释里的真实目录样例
+  // （`kimi-k3` 计费 x6.00、`gpt-6-astra` x25.00 —— 倍率由上游目录侧挂在 name 后）。
+  'agnescode/kimi-k3': { name: 'AgnesCode · Kimi K3' },
+  'agnescodeintl/kimi-k3': { name: 'AgnesCode 国际 · Kimi K3' },
   'codely/codely-flash': { name: 'Codely · Flash' },
   'magicrew/deepseek-v4.1-flash': { name: 'Magicrew · DeepSeek V4.1 Flash' },
   'magicrewintl/deepseek-v4.1-flash': { name: 'MagiCrew 国际 · DeepSeek V4.1 Flash' },

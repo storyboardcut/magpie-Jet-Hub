@@ -2,8 +2,10 @@
 //
 // ⚠️ 签到是**有副作用**的真操作（会真的给账号领积分）。所以这里分两层：
 //   1) 纯映射层（toMagpieCheckin）：所有 kind → outcome 的对应关系，不联网；
-//   2) 真调用层：只打一个**明确不支持签到**的渠道（workbuddy），
+//   2) 真调用层：只打一个**明确不支持签到**的渠道（cline），
 //      它固定回 `ineligible`（能力缺失，不是故障），不会给任何账号产生副作用。
+//      （代表原来是 workbuddy；2026-11-22 同步 098de904 后上游给它加了签到实现，
+//       不能再拿它当「能力缺失」的反面代表。）
 import * as mod from '../src/plugin.mjs'
 
 // ⚠️ 本文件会真起容器，必须隔离（否则 `resolveHome(undefined)` 退回 `homedir()`，
@@ -180,11 +182,16 @@ if (typeof toMagpieCheckin === 'function') {
       for (const q of (ls[1] ?? '').matchAll(/'([^']+)'|"([^"]+)"/g)) branches.push(q[1] ?? q[2])
     }
     ok(
-      // 大小写不敏感：等价写法 `=== ZCODE.id` 与 `=== 'zcode'` 都该放行（否则纯重构假红）。
-      // 2026-11-22 跟进上游 1c3775b：上游给 claimAll 加了 MODELSCOPE 特判
-      // （claimModelscopeDaily 走 magicube 会话，与通用表路径不同源）⇒ 放行两条。
-      branches.length <= 2 && branches.every((n) => ['zcode', 'modelscope'].includes(n.toLowerCase())),
-      `claimAll 里的「按 provider 特判」只应 zcode / modelscope 两条，实际：${branches.join(', ') || '无'}`,
+      // 大小写不敏感：等价写法 `=== ZCODE.id` 与 `=== 'zcode'` 都该放行（否则纯重构假红），
+      // 但 `NEWSENSE` / `'lobsterai'` 这种**真的第五条**仍要红。
+      // 2026-11-22 同步 098de904：上游在 claimAll 里新增了 MODELSCOPE 的**领取后清缓存**
+      // 分支（`req.provider === MODELSCOPE.id && …balanceCacheOf()?.clear`）——
+      // 它不是「领取能力特判」（modelscope 的 claim 仍在能力表里），所以
+      // `src/plugin.mjs` 的 SPECIAL_CLAIM_PROVIDERS 不用加；若 modelscope 改走
+      // 「领取分发」特判、或出现第五家，这里会红，人工判断要不要动那张表。
+      branches.length <= 2
+        && branches.every((n) => ['zcode', 'modelscope'].includes(n.toLowerCase())),
+      `claimAll 里的「按 provider 特判」只应 ZCODE + MODELSCOPE（清缓存）两条，实际：${branches.join(', ') || '无'}`,
     )
     ok(/isQoderFamily\(req\.provider\)/.test(seg), 'claimAll 里的 Qoder 家族特例还在（isQoderFamily）')
     ok(/creditsOf\(credits, req\.provider\)/.test(seg), 'claimAll 里的能力表判据还在（creditsOf(...).claim）')
@@ -241,16 +248,16 @@ if (typeof toMagpieCheckin === 'function') {
   // 反向固定几个代表：文档与答复里点过名的，别让判据整体漂掉
   // 2026-11-02 上游同步：magicrew 系新增了 claimMagicrewLoginGift / claimMagicrewOnboardingTasks，
   // 在 provider-credits 表里已带 claim ⇒ 从「不该声明」名单移除。
-  // 2026-11-22 跟进上游 1c3775b：workbuddy / raccoon / modelscope 也拿到了 claim
-  // （raccoon-credits 的 claimRaccoonDailyCheckin、modelscope-checkin 的 claimModelscopeDaily、
-  // workbuddy-intl-activity）⇒ 同样从「不该声明」名单移除，只留真没有的 5 家。
+  // 2026-11-22 同步 098de904：上游给 workbuddy（共享 claimDailyCheckin）/ raccoon
+  // （claimRaccoonDailyCheckin）/ modelscope（claimModelscopeDaily）都加了签到实现，
+  // provider-credits 表里已带 claim ⇒ 三家一并移入「该声明」名单。
   const unsupported = ['jet-hub-cline', 'jet-hub-opencode', 'jet-hub-officeace', 'jet-hub-accio', 'jet-hub-gemini']
   for (const id of unsupported) {
     const [, fn] = mod.PLUGINS.find(([i]) => i === id)
     const plugin = await fn({}, iso.options())
     ok(typeof plugin.auth.checkin !== 'function', `${id}: 上游没有签到实现，不该声明 auth.checkin（否则 magpie 会画一个必然失败的开关）`)
   }
-  const supported = ['jet-hub-trae', 'jet-hub-qoder', 'jet-hub-qodercn', 'jet-hub-zcode', 'jet-hub-lobsterai', 'jet-hub-loomy']
+  const supported = ['jet-hub-trae', 'jet-hub-qoder', 'jet-hub-qodercn', 'jet-hub-zcode', 'jet-hub-lobsterai', 'jet-hub-loomy', 'jet-hub-workbuddy', 'jet-hub-raccoon', 'jet-hub-modelscope']
   for (const id of supported) {
     const [, fn] = mod.PLUGINS.find(([i]) => i === id)
     const plugin = await fn({}, iso.options())
@@ -258,16 +265,18 @@ if (typeof toMagpieCheckin === 'function') {
   }
 }
 
-// ---- 3) 能力方向锚点：不真调，只查方法在不在 --------------------------------
+// ---- 3) 不支持的渠道连方法都不该有 -----------------------------------------
 //
-// ⚠️ 不真调 checkin：那会真的给账号领积分。
-// 2026-11-22 跟进上游 1c3775b：上游给 workbuddy 补了活动/签到路径
-// （workbuddy-intl-activity 进了 provider-credits 表）⇒ workbuddy 现在必须声明
-// auth.checkin（方向反转，原断言见 git 历史）。
+// ⚠️ 本节最早用 workbuddy 当「不支持」的代表（`4fd1677` 起它不声明 checkin，
+// 上游没有签到实现）。2026-11-22 同步 098de904 后上游给 workbuddy 加了签到
+// （provider-credits 表走共享 `claimDailyCheckin`）⇒ 代表换成 cline。
+// 另：真调 checkin 会真的给账号领积分，所以这里只断言「方法在不在」、不发任何
+// RPC、不需要真凭据 —— 也就**不要**再调 `skipLive()`：那会让
+// `scripts/test-all.mjs` 的汇总行永远挂着「设 JET_HUB_LIVE=1 才会跑」（假承诺）。
 {
-  const [, wb] = mod.PLUGINS.find(([i]) => i === 'jet-hub-workbuddy')
-  const wbPlugin = await wb({}, iso.options())
-  ok(typeof wbPlugin.auth.checkin === 'function', 'workbuddy 必须有 auth.checkin（2026-11-22 上游补了实现）')
+  const [, cl] = mod.PLUGINS.find(([i]) => i === 'jet-hub-cline')
+  const clPlugin = await cl({}, iso.options())
+  ok(typeof clPlugin.auth.checkin !== 'function', 'cline 不该有 auth.checkin（上游没有签到实现）')
   // 真支持签到的家必须有。这里只查形状、不真调 —— 真调会真的给账号领积分。
   const [, tr] = mod.PLUGINS.find(([i]) => i === 'jet-hub-trae')
   const trPlugin = await tr({}, iso.options())

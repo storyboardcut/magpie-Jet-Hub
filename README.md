@@ -1,20 +1,15 @@
 # magpie-jet-hub
 
-[![repo](https://img.shields.io/badge/github-storyboardcut/magpie--Jet--Hub-blue)](https://github.com/storyboardcut/magpie-Jet-Hub)
+[![repo](https://img.shields.io/badge/github-Betsy20/magpie--Jet--Hub-blue)](https://github.com/Betsy20/magpie-Jet-Hub)
 
 把 **deepseek-harness-codearts 插件本体**装进 magpie。装上之后，magpie 的供应商列表里会多出 31 家 AI 编码渠道，用的是你在 DSH 里已经登录好的那批账号 —— 不需要重新登录，也不需要复制凭据。
 
 > **上游插件**：[`iJetLi/dsh-providers-hub`](https://github.com/iJetLi/dsh-providers-hub)（MIT）。
-> 它给 DSH 提供 30+ 家供应商的登录、多账号池、静默续期、积分领取。
+> 它给 DSH 提供 32 家供应商的登录、多账号池、静默续期、积分领取。
 > 本仓库**不是它的分支、也不修改它的行为** —— 只把它的发布产物装进 [`vendor/`](vendor/)，
 > 外面加一层 magpie 适配。供应商适配、登录流程、续期算法本身的问题去上游提；
 > 装不进 magpie、卡片显示不对、控制台没反应，才是本仓库的。
 > `vendor/` 的来源、许可与逐文件差异见 [docs/vendor.md](docs/vendor.md)。
-
-> **本 fork 的同步状态（2026-11-22 起）**：原作者停更后由 [`storyboardcut`](https://github.com/storyboardcut) 接手跟进上游。
-> 当前基线 `1c3775b`（并入上游 297 个提交），供应商 29 → **31** 家（新增 AgnesCode 国内/国际两站）；
-> 原有 13 个补丁文件中的 2 个（jet-hub-rpc「全关即意图」、types.d.ts 的 `closeProvider`）已被上游原生吸收而退役，剩 11 个。
-> 上游的 npm 发布线与 GitHub master 均可用（本次实测一致），例行同步方法见 [docs/vendor.md](docs/vendor.md) 的「版本怎么升」。
 
 ## 目录
 
@@ -78,7 +73,7 @@ magpie plugin add <你 clone 下来的那个目录>
 `git clone` 下来的目录没有 `node_modules`（`.gitignore` 里就写着），而 magpie 的目录式安装**不会替你装依赖**，所以必须先自己装一次：
 
 ```bash
-git clone https://github.com/storyboardcut/magpie-Jet-Hub.git
+git clone https://github.com/Betsy20/magpie-Jet-Hub.git
 cd magpie-Jet-Hub
 npm install          # 必须；跳过这步插件会在加载时崩，控制台也就不会出现
 magpie plugin add "$PWD"
@@ -87,14 +82,14 @@ magpie plugin add "$PWD"
 也可以让 magpie 自己装（它用自带的 bun 按 `package.json` 的依赖树装）：
 
 ```bash
-magpie plugin add github:storyboardcut/magpie-Jet-Hub
+magpie plugin add github:Betsy20/magpie-Jet-Hub
 ```
 
 装完可以用 `npm ls --depth=0` 对一眼 —— 根 `package.json` 的 `dependencies` 必须覆盖 `vendor/` 里本体 import 的全部第三方包（`jose`、`undici` 这两个漏过，换机一加载就 `ERR_MODULE_NOT_FOUND`，表现为「控制台打不开」）。`tests/t-deps.mjs` 会扫 Node 侧全部源码的 import 守着这条。
 
 ## 31 个供应商，不是一个
 
-本体里有 34 个 provider，其中 2 个是路由组（`aggregate` 聚合路由、`jet-hub-auto` 自动选号），另有一家 `doubao`（豆包）上游标着 **`channel: false`** —— 签到/积分已接通但还没有模型目录（UI 先行阶段）。这三类注册成 magpie 供应商都只会得到一张空卡，所以**本插件只接那 31 家真渠道**。
+本体里有 34 个 provider，其中 **2 个是路由组**（`aggregate` 聚合路由、`jet-hub-auto` 自动选号）。路由组没有自己的账号池和模型目录，注册成 magpie 供应商只会得到一张永远空着的卡。上游 2026-11-05 合并进来的 `doubao`（豆包）也只有账号 / 签到 / 积分、**没有模型适配器**（vendor 的 `modelAdapters` 表里没有它），同样是张空卡 —— 所以**本插件只接那 31 家真渠道**；哪天上游给 doubao 接了 adapter，`tests/t-new-account` 的「vendor 有的插件必须有」会红着提醒加回来。
 
 完整名单以 `src/plugin.mjs` 的 `DSH_PROVIDERS` 为准（下表只列几行示例）。
 
@@ -104,8 +99,6 @@ magpie plugin add github:storyboardcut/magpie-Jet-Hub
 | `jet-hub-workbuddy` | WorkBuddy (国际版) |
 | `jet-hub-minimax` | MiniMax Code (中国版) |
 | `jet-hub-accio` | Accio (阿里) |
-| `jet-hub-agnescode` | AgnesCode（2026-11-22 新增） |
-| `jet-hub-agnescodeintl` | AgnesCode (国际版)（2026-11-22 新增） |
 | `jet-hub-codely` | Codely (Unity 团结引擎) |
 | `jet-hub-magicrew` | 超级麦吉 (MagiCrew) |
 | `jet-hub-magicrewintl` | MagiCrew (国际版) |
@@ -283,7 +276,7 @@ models.dev 目录（`~/.cache/magpie/models.json`）按**模型尾名**匹配生
 
 本体冷启动要建容器、拉凭据链、预热目录，**20–30 秒**（预热过的实例通常 1–2 秒），而 magpie 给 `provider.models` 的超时只有 **20 秒**。所以在 `models()` 里 `await` 必然超时。
 
-`models()` 因此分三档：内存缓存命中 → 立刻返回并后台刷新；磁盘缓存命中 → 立刻返回真实目录；都没有 → 返回静态兜底表（每家一条；agnescode 双子的兜底表上游**刻意留空** —— 目录只有远端账号级一个来源，见 docs/vendor.md），启动甩到后台。`authorize()` 与 `usage()` 由用户点击触发、允许长时间，走真等。
+`models()` 因此分三档：内存缓存命中 → 立刻返回并后台刷新；磁盘缓存命中 → 立刻返回真实目录；都没有 → 返回静态兜底表（31 家各一条），启动甩到后台。`authorize()` 与 `usage()` 由用户点击触发、允许长时间，走真等。
 
 ## 侧栏页与控制台
 
@@ -294,8 +287,8 @@ magpie 里这个插件有两个界面：
 
 **本地控制台**（`console/`）是完整功能，注册在 `http://127.0.0.1:18500/`。端口被占时向后顺延（18501、18502…），
 但**只有拿到首发端口 18500 的那个实例**才会把地址写进 `~/.config/magpie/jet-hub-console.json` ——
-漂移到别的端口时不写，别拿那个文件当唯一来源。左栏是**供应商列表**（注册 31 家；快照里旧 29 家都有模型条目，
-agnescode 双子接入后 `page/models.js` 快照待重跑），底部一行三个切页按钮，主区是**账号页**（默认视图）：
+漂移到别的端口时不写，别拿那个文件当唯一来源。左栏是**供应商列表**（注册 31 家，快照里 31 家都有模型条目
+—— `marvis` 那条是静态兜底（`main-auto`），上游没有模型目录端点），底部一行三个切页按钮，主区是**账号页**（默认视图）：
 
 | 位置 | 做什么 |
 |---|---|
@@ -397,5 +390,5 @@ docs/                  截图、vendor.md、testing.md
 ## 上游与致谢
 
 - 上游插件：[`iJetLi/dsh-providers-hub`](https://github.com/iJetLi/dsh-providers-hub)（MIT，`Copyright (c) 2026 Jet`）—— 本仓库 `vendor/` 是它的构建产物，`vendor/LICENSE` 随目录一起分发。
-- 30+ 家渠道的登录 / 续期 / 选号逻辑全部来自上游，本仓库只做 magpie 适配层。
+- 31 家渠道的登录 / 续期 / 选号逻辑全部来自上游，本仓库只做 magpie 适配层。
 - 图标：多数来自各厂商官方标识，少数取自 [LobeHub icons](https://github.com/lobehub/lobe-icons)。

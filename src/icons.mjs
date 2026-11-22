@@ -193,23 +193,19 @@ function withIntl(dataUri) {
 const MARVIS_MARK =
   '<path d="M5 18V6h2.6l4.4 7.1L16.4 6H19v12h-2.5V9.9l-3.9 6.2h-1.2L7.5 9.9V18H5z"/>'
 
-/**
- * AgnesCode 占位标识：上游 `AGNESCODE_ICON` 解码后的原始 SVG（墨绿底 #0F766E +
- * 白色 A 字形）。国内站用它的 data URI；国际站套 `intl()` 地球环。
- */
-const AGNESCODE_SVG =
-  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#0F766E"/><path d="M11.1 5h1.8L17 19h-2.6l-.9-3H10.5l-.9 3H7L11.1 5z" fill="#fff"/><path d="M12 9.2l-1.4 4.3h2.8L12 9.2z" fill="#0F766E"/></svg>'
-const AGNESCODE_URI = `data:image/svg+xml;base64,${Buffer.from(AGNESCODE_SVG).toString('base64')}`
+/** AgnesCode 占位标识：白色字母 A（24×24 视口），配品牌青底。 */
+const AGNES_A =
+  '<path d="M5.5 19L12 4.5 18.5 19M8 14.4h8" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>'
 
 const PROVIDER_SVG = {
   // Accio 是阿里的业务，用阿里 logo
   accio: badge(ALIBABA),
-  // AgnesCode 国内/国际两站（2026-11-22 自行跟进上游 1c3775b）：上游自己也只有
-  // 占位图标（`plugin-src/client/provider-icons.js` 的 `AGNESCODE_ICON`，墨绿底
-  // #0F766E + 白色 A 字形，两站共用同一份资产）。国际站按本仓惯例套虚线地球环
-  // （与 autoclawintl / qodercn 同一手法 —— 同品牌两站不能撞图，见 t-options 1b）。
-  agnescode: AGNESCODE_URI,
-  agnescodeintl: intl(AGNESCODE_SVG),
+  // AgnesCode（2026-11-19 上游新增，agnes-ai.cn / agnes-ai.com 两站）：没有公开矢量
+  // 标识（LobeHub 未收录），按品牌青色 + 字母 A 自绘（域名 agnes-ai 的「A」）。
+  agnescode: badge(AGNES_A, { bg: '#0f766e', mono: '#ffffff' }),
+  // 国际站套虚线地球环（与 autoclawintl / magicrewintl 同一手法），否则「每家图标
+  // 互不相同」的断言会因两站同图而红。
+  agnescodeintl: intl(badge(AGNES_A, { bg: '#0f766e', mono: '#ffffff' })),
   // AStudio 属讯飞
   astudio: badge(IFLYTEK),
   // AutoClaw 属智谱
@@ -220,9 +216,6 @@ const PROVIDER_SVG = {
   // CodeArts 是华为云的
   codearts: badge(HUAWEICLOUD),
   codely: `data:image/png;base64,${CODELY_PNG_BASE64}`,
-  // 豆包（字节，2026-11-22 自行跟进上游 1c3775b）：上游也只有占位图
-  // （`DOUBAO_ICON`，豆包品牌主色 #3370FF 底 + 白色豆包脸），原样接进来。
-  doubao: 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHJlY3Qgd2lkdGg9IjI0IiBoZWlnaHQ9IjI0IiByeD0iNSIgZmlsbD0iIzMzNzBGRiIvPjxjaXJjbGUgY3g9IjEyIiBjeT0iMTAiIHI9IjQiIGZpbGw9IiNmZmYiLz48Y2lyY2xlIGN4PSIxMC40IiBjeT0iOS42IiByPSIwLjkiIGZpbGw9IiMzMzcwRkYiLz48Y2lyY2xlIGN4PSIxMy42IiBjeT0iOS42IiByPSIwLjkiIGZpbGw9IiMzMzcwRkYiLz48cGF0aCBkPSJNNyAxNi41YzEuNiAyIDguNCAyIDEwIDAiIHN0cm9rZT0iI2ZmZiIgc3Ryb2tlLXdpZHRoPSIxLjYiIGZpbGw9Im5vbmUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPjwvc3ZnPg==',
   gemini: badge(GEMINI),
   lobsterai: `data:image/png;base64,${LOBSTERAI_PNG_BASE64}`,
   loomy: `data:image/png;base64,${LOOMY_PNG_BASE64}`,

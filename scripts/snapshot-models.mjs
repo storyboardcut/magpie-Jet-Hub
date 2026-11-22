@@ -153,8 +153,8 @@ function magpieIdOfSegment(seg) {
  */
 const NAMES = {
   'jet-hub-accio':         ['Accio (阿里)', '阿里 Accio'],
-  'jet-hub-agnescode':     ['AgnesCode', 'AgnesCode 国内站（2026-11-22 跟进上游 1c3775b 新增）'],
-  'jet-hub-agnescodeintl': ['AgnesCode (国际版)', 'AgnesCode 国际站（与国内站账号体系隔离）'],
+  'jet-hub-agnescode':     ['AgnesCode (中国版)', 'AgnesCode 国内站（本 fork 独有，agnes-ai.cn）'],
+  'jet-hub-agnescodeintl': ['AgnesCode (国际版)', 'AgnesCode 国际站（本 fork 独有，agnes-ai.com）'],
   'jet-hub-astudio':       ['AStudio (讯飞)', '讯飞 AStudio'],
   'jet-hub-autoclaw':      ['AutoClaw (智谱)', '智谱 AutoClaw'],
   'jet-hub-autoclawintl':  ['AutoClaw (国际版)', '智谱 AutoClaw 国际版'],

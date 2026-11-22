@@ -895,6 +895,30 @@ export declare class CodeArtsAdapter extends LlmAdapter {
     /** 动态模型缓存（首次 listModels 成功后填充）。 */
     private remoteModels;
     /**
+     * ★★★ **本进程内最后一次成功拉到的目录**（2026-11-22，方案 B）。
+     *
+     * 为什么需要它：用户要求「直接走远端，不用本地兜底列表」⇒
+     * `remoteModels` 在远端还没拉到时是 `undefined`，而 **`syncCatalogEntries()`
+     * 是同步方法**（`listAllModels` 的契约，设置页在渲染路径上调它、不能 await）
+     * ⇒ 若那时返回 `[]`，`provider.status` 的 `total=0` 会让设置页把整个 provider
+     * **误显示为「已关闭」**（`closed = total > 0 && disabled === total`）。
+     *
+     * ⚠️ 它**不是静态表**：内容来自**上一次真实远端读取**，只是把那一份留着给同步路径用。
+     */
+    private lastRemoteSnapshot;
+    /**
+     * ★★★ **跨进程快照**（磁盘，方案 B 的第二级）。
+     *
+     * 复用 PR #135 已有的 `src/model-catalog-cache.ts`（`readCatalogCache` 是**同步**的，
+     * 实测读盘 + parse 1~5ms）。重启后第一次打开设置页时 `remoteModels` 还没拉到，
+     * 但磁盘上有**上次进程真实拉到的那份目录** ⇒ 设置页立刻正确，不必等网络。
+     *
+     * ⚠️ 只缓存**首次读盘结果**：`readCatalogCache` 每次调用都是同步 IO，
+     * 放在渲染路径上反复读会让设置页抖（本仓既有教训：`listModels` 的同步 IO 预算）。
+     */
+    private diskCatalogSnapshot;
+    private diskCatalogSnapshotRead;
+    /**
      * AgentCenter 动态窗口表（**独立于目录可见性**）。
      *
      * ⚠️⚠️ **为什么必须与目录解耦**（2026-10-30 四路审计 P3 D6 定案）：

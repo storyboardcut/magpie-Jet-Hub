@@ -11,7 +11,9 @@
  * （`PROVIDER_IDS` / `DSH_PROVIDERS` / `idOf`）都留在 `src/plugin.mjs` 里，
  * 需要时从那里 import。
  *
- * ⚠️ 只有 **29** 个工厂：`aggregate`（聚合路由）与 `jet-hub-auto`（自动选号）
+ * ⚠️ 只有 **31** 个工厂：`aggregate`（聚合路由）与 `jet-hub-auto`（自动选号），
+ * 以及只有签到/积分、没有模型适配器的 `doubao`（豆包）也不注册 —— 见
+ * `src/plugin.mjs` 的 DSH_PROVIDERS 注释。
  * 这两个路由组没有自己的账号池与模型目录，注册成 magpie provider 只会得到一张
  * 永远没账号、也永远选不了具体模型的空卡，所以不注册。
  */
@@ -27,10 +29,10 @@ for (const id of PROVIDER_IDS) {
 /** 本体 `accio`（magpie id `jet-hub-accio`）。 */
 export const JetHubAccioPlugin = byId.get('jet-hub-accio')
 
-/** 本体 `agnescode`（magpie id `jet-hub-agnescode`，AgnesCode 国内站，2026-11-22 跟进上游 1c3775b）。 */
+/** 本体 `agnescode`（magpie id `jet-hub-agnescode`，2026-11-19 上游新增）。 */
 export const JetHubAgnescodePlugin = byId.get('jet-hub-agnescode')
 
-/** 本体 `agnescodeintl`（magpie id `jet-hub-agnescodeintl`，AgnesCode 国际站）。 */
+/** 本体 `agnescodeintl`（magpie id `jet-hub-agnescodeintl`，国际版）。 */
 export const JetHubAgnescodeintlPlugin = byId.get('jet-hub-agnescodeintl')
 
 /** 本体 `astudio`（magpie id `jet-hub-astudio`）。 */
