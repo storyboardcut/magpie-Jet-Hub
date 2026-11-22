@@ -1,14 +1,14 @@
-// 核 `vendor/` 是否仍是「上游构建产物 + 13 个补丁文件」——把 docs/vendor.md 的
+// 核 `vendor/` 是否仍是「上游构建产物 + 11 个补丁文件」——把 docs/vendor.md 的
 // 「怎么自己核一遍」那堆 shell 收成一条命令。
 //
 //   node scripts/verify-vendor.mjs /path/to/upstream     # upstream = 跑过 npm install 的上游仓库根
 //
 // 为什么需要它：`docs/vendor.md` 里「1170 个文件、其中 1157 个与上游逐字节一致」这条
 // 基线是**整份快照唯一可复核的地方**。原来只能手动 `find … sha256sum | sort | diff`，
-// 一旦临时目录被清掉就再也说不清「这 13 个差异到底是补丁还是被人手改了」。这个脚本
+// 一旦临时目录被清掉就再也说不清「这 11 个差异到底是补丁还是被人手改了」。这个脚本
 // 把两件事钉死：
 //
-//   1. 差异文件集合必须**恰好等于** PATCH_FILES（13 个）—— 多一个就是快照被污染，
+//   1. 差异文件集合必须**恰好等于** PATCH_FILES（11 个）—— 多一个就是快照被污染，
 //      少一个就是补丁被同步覆盖（都属于静默故障，不报错的）；
 //   2. 文件数 / `.map` 数 / `locale` / 版本号与文档里写的数字一致。
 //
@@ -24,7 +24,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url))
 const VENDOR = path.join(HERE, '..', 'vendor')
 
 /**
- * 本仓库对上游构建产物做的**全部**改动（docs/vendor.md 的差异表，7 类 / 13 个文件）。
+ * 本仓库对上游构建产物做的**全部**改动（docs/vendor.md 的差异表，5 类 / 11 个文件）。
  *
  * 这份清单是**契约**，不是「已知差异」的备注：同步上游后如果少了其中任何一个，
  * 说明补丁被整片覆盖了（静默故障）；如果多出一个，说明快照被别的动作污染过。
@@ -34,23 +34,21 @@ const PATCH_FILES = [
   'lib/backup.js',                      // ④ keepDisabledModels 的实现
   'lib/gemini-oauth.d.ts',              // ① 两个默认 client 常量拆两段
   'lib/gemini-oauth.js',                // ① 同上
-  'lib/jet-hub-rpc.js',                 // ⑤ 黑名单覆盖全量即补设供应商关闭意图
   'lib/leveldb-sstable.js',             // ⑤ WAL 分片重组（Snappy 压缩块）
   'lib/magicrew-browser-login.d.ts',    // ② 声明跟上实现（CDP_CREDENTIAL_EXPRESSION）
   'lib/magicrew-browser-login.js',      // ② IndexedDB 读取 + ③ 一次性 profile 回收
   'lib/magicrew-local-browser.d.ts',    // ② 声明跟上实现（leveldbTextFor 三参 / idbCredentialsIn）
   'lib/magicrew-local-browser.js',      // ② IndexedDB 读取
-  'lib/types.d.ts',                     // ⑥ RpcModelSetDisabledManyRequest.closeProvider
   'lib/baizhi-rpc.js',                  // ⑦ 新增 baizhi.setSession（补网页登录态）
   'lib/baizhi-rpc.d.ts',                // ⑦ 同上，类型声明
 ].sort()
 
 /**
- * 13 个补丁文件**内容**的 sha256 指纹。
+ * 11 个补丁文件**内容**的 sha256 指纹。
  *
  * ## ⚠️⚠️ 为什么光有「差异集合 = 补丁表」还不够（2026-11-10 对抗审查 P1-4）
  *
- * 上面那条只核「这 13 个文件**与上游不同**」，不核「**怎么**不同」——
+ * 上面那条只核「这 11 个文件**与上游不同**」，不核「**怎么**不同」——
  * 实测把 `jet-hub-rpc.js` 的 `closeProvider ? true : 'keep'` 改回 `closeProvider`
  * （正是 CHANGELOG 说 `t-rpc-cover` 盯着的那个回归）、或给 `leveldb-sstable.js`
  * 加一行注释，脚本照样打印「无污染、无漏打」并 exit 0。
@@ -61,20 +59,18 @@ const PATCH_FILES = [
  * ## 怎么更新
  *
  * 有意改补丁时跑 `node scripts/verify-vendor.mjs --print-hashes`，把它打印的
- * 13 行原样贴回来。**不要**为了让脚本变绿就跳过校验 —— 那等于把这条门禁拆掉。
+ * 11 行原样贴回来。**不要**为了让脚本变绿就跳过校验 —— 那等于把这条门禁拆掉。
  */
 const PATCH_SHA256 = {
   'lib/backup.d.ts': '0f1169ae4beca9f5757a348e65385705deac52ea6226c3f9843eba9fff1b83b0',
   'lib/backup.js': '53631bb8e2c0022b8794c638089a2013ffff7da0291c37e796c7f4a829e431ba',
   'lib/gemini-oauth.d.ts': 'cbc9c21e0b39ecedee4eaf3749bc81439cbe45f77550b1d6bea5b38d3e332c52',
   'lib/gemini-oauth.js': '0e78a047d0ea62f70d30e54e16196a9530abf0c77e60ae027e4fb93d17220320',
-  'lib/jet-hub-rpc.js': 'b72491d639a62e56dbdaf6eff7f8db6ee3f541229776122aa90ce3e55ccb52d9',
   'lib/leveldb-sstable.js': '2d6954eccdb63a46ec68d0cf57fdd7ded2d31df5463d77e5569ed29457ddb853',
   'lib/magicrew-browser-login.d.ts': '5e7c3359790c77badfb1f9ebe9de6c4d26509075957dd7ac9813861ff5d7fc97',
   'lib/magicrew-browser-login.js': 'e81f252e2cea662c336d39122b3ec8d0094bd54ec04256c0ae48d67afdbf42c4',
   'lib/magicrew-local-browser.d.ts': '7198b59278585fa3da5afbc68a23fa917575cc17a8ec096b2da3a31da3a30758',
   'lib/magicrew-local-browser.js': '6adc02a9116267151dd1c0f5fccb56e714637160512b5c27b44e33493143b435',
-  'lib/types.d.ts': 'c259c4878f5f526494f9ebf28066d88a730ce519b4ef6a2ee0adfefe60849add',
   'lib/baizhi-rpc.js': 'a7aeabc1e0b156b29d42520b41bad9b696546a0d4e293782925a559f7d3ec9de',
   'lib/baizhi-rpc.d.ts': '87628eedb198b8f8e15f6d00854c3bc8fd909de52484506c9983701f81b39b42',
 }
@@ -89,7 +85,7 @@ const PATCH_SHA256 = {
  * **归一化后仍要求逐字节相等**（不是整份文件豁免），所以干净快照算「一致」、
  * 手改任何一位都会进 `differing` 判污染。
  */
-const EXPECT = { libFiles: 1170, identical: 1157, localeFiles: 2, maps: 584, mapMiB: '4.00' }
+const EXPECT = { libFiles: 1314, identical: 1303, localeFiles: 2, maps: 656, mapMiB: '4.50' }
 
 /**
  * 上游构建产物里**随工具链版本漂移**的文件 —— 既不是补丁，也不是污染。
@@ -232,9 +228,9 @@ function main() {
   const missing = [...PATCH_REL].filter((f) => !differing.includes(f)).sort()
   if (missing.length) bad(`这些补丁**不在**差异里，说明被同步覆盖了：${missing.join(', ')}`)
   if (extra.length) bad(`这些文件与上游不同，但不在补丁表里（手改或污染）：${extra.join(', ')}`)
-  if (!missing.length && !extra.length) ok(`差异集合恰好等于补丁表（${PATCH_FILES.length} 个文件 / 7 类）${artifactNormalized.length ? `；另有 ${artifactNormalized.length} 个构建产物靠归一化算一致` : ''}`)
+  if (!missing.length && !extra.length) ok(`差异集合恰好等于补丁表（${PATCH_FILES.length} 个文件 / 5 类）${artifactNormalized.length ? `；另有 ${artifactNormalized.length} 个构建产物靠归一化算一致` : ''}`)
 
-  // ⚠️⚠️ 上面只核「这 13 个文件**与上游不同**」，不核「**怎么**不同」（2026-11-10 对抗审查 P1-4）。
+  // ⚠️⚠️ 上面只核「这 11 个文件**与上游不同**」，不核「**怎么**不同」（2026-11-10 对抗审查 P1-4）。
   // 实测把 `jet-hub-rpc.js` 的 `closeProvider ? true : 'keep'` 改回 `closeProvider`、
   // 或给 `leveldb-sstable.js` 加一行注释，上面那条照样绿 —— 而这是本脚本**唯一**该抓
   // 却又抓不到的一类（补丁被人手改）。逐个核 sha256。

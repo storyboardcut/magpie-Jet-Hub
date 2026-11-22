@@ -9,12 +9,17 @@
  *           account.test / account.reset / account.resetAll / login.poll /
  *           credits.status / credits.claimAll / credits.balances /
  *           model.list / model.setDisabled /
+ *           promotion.candidates（★ 全部渠道的未决活动候选，供模型选择器那行的
+ *           悬停；`single` 槽的占位者一次取全，见该 case 的三条判据）/
  *           captcha.demand / captcha.carrierUrl / captcha.contribute（内部载体，
  *           载体页见 src/zcode-carrier-page.ts 与 src/captcha-carrier-server.ts）/
  *           backup.export / backup.import / backup.status /
  *           nativeSearch.getEnabled / nativeSearch.setEnabled /
  *           sessionBalance.getEnabled / sessionBalance.setEnabled /
  *           panelEntry.get / panelEntry.set /
+ *           resume.getState / resume.setArmed / resume.setEnabled /
+ *           resume.fireNow / resume.forget（限流中断后的「解禁再继续」，
+ *           状态在 `src/rate-limit-resume.ts` 的模块级单例上）/
  * 另有一条 GET 路由 `/api/jet-hub/captcha-carrier`：渲染内部载体的载体页
  * （⚠ 手工诊断用；guest 加载不到它，见该路由注释里的主进程取证）。
  */
@@ -28,6 +33,7 @@ import type { LobsteraiAuth } from './lobsterai-auth.js';
 import type { QoderAuth } from './qoder-auth.js';
 import type { TraeAuth } from './trae-auth.js';
 import type { ClineAuth } from './cline-auth.js';
+import type { PromotionCandidateRow } from './promotion-tooltip.js';
 import type { LoomyAuth } from './loomy-auth.js';
 import type { RaccoonAuth } from './raccoon-auth.js';
 import type { ZcodeAuth } from './zcode-auth.js';
@@ -43,6 +49,7 @@ import type { AutoclawAuth } from './autoclaw-auth.js';
 import type { ModelscopeAuth } from './modelscope-auth.js';
 import type { QiniuAuth } from './qiniu-auth.js';
 import type { MonkeycodeAuth } from './monkeycode-auth.js';
+import type { AgnescodeAuth } from './agnescode-auth.js';
 import { type AstudioAuth } from './astudio-auth.js';
 import { type MagicrewAuth } from './magicrew-auth.js';
 import { type MarvisAuth } from './marvis-auth.js';
@@ -334,7 +341,12 @@ export interface CreditsEndpointDeps<TCredential = BuddyCredential, TProduct = B
      * - **永不抛**：抽奖是不可逆写操作且会因「今日已参与 / 窗口外 / 无资格」失败，
      *   那些都**不是**签到失败（本仓库有两轮「登录成功却因记账失败被报成失败」事故史）。
      *
-     * ⚠️ 只有 trae 注入；其余 provider 不传 ⇒ 行为逐字不变。
+     * ⚠️ 目前有两家注入：`trae`（抽奖）与 `workbuddy` 国际版（活跃上报）。
+     * ⚠️ **第四参 `outcome` 是必需的**（PR #87 审计 P1-1/P1-2）：接线层要是只映射
+     * 前三个参数，实现里两种结局（`inactive` / `failed`）与两种执行
+     * （`claimed` / `already-claimed`）行为会**逐字相同** —— 领取失败照样产生
+     * 用户可见副作用（在人家账号里建会话），而且日志零字，结构上查不出来。
+     * 其余 provider 不传 ⇒ 行为逐字不变。
      */
     afterClaimNote?: (credential: TCredential, product: TProduct, entry: ProviderAccountEntry, outcome: ClaimOutcome) => Promise<string | undefined>;
     /** 查询积分余额；默认使用真实的 fetchCreditBalance。 */
@@ -738,6 +750,26 @@ export interface JetHubAuths {
      *    恒「未登录」而上游其实只需一次 refresh，且日志零字 —— issue IKKHL5）。
      */
     readonly marvis: MarvisAuth;
+    /**
+     * AgnesCode 国内站（`agnescode`，2026-11-19）—— **本 fork 独有**。
+     *
+     * ⚠️ 凭据是**本机桌面客户端登录态**（`%APPDATA%\AgnesCode`，Chromium
+     *    `os_crypt` + DPAPI），不是可粘贴的 Key ⇒ 本家的 `account.create`
+     *    走「导入本机会话」分支（与 AStudio 同族）。
+     * ⚠️ **没有** refresh 端点 ⇒ 与 monkeycode / qiniu 同格：刻意**不进**
+     *    `SELF_HEAL_REFRESHABLE_PROVIDERS`，而是在 `SELF_HEAL_EXEMPT` 里登记理由。
+     */
+    readonly agnescode: AgnescodeAuth;
+    /**
+     * AgnesCode 国际站（`agnescodeintl`）—— 与国内站是**两套独立账号体系**
+     *（`*.agnes-ai.cn` / `*.agnes-ai.com`），实现完全共用、只差 `product`。
+     *
+     * ⚠️ 与 `agnescode` 是**同一个类的两个实例** ⇒ `probeById` /
+     *    `WRITES_RATE_LIMIT_PROVIDERS` / ref 前缀表 / 积分表 / registry 数组 /
+     *    本接口每处都要两站到位，漏一处静默失效
+     *（minimax / monkeycode 都复发过同一形态）。
+     */
+    readonly agnescodeintl: AgnescodeAuth;
 }
 /**
  * 按 provider id 取 auth 实例。
@@ -807,6 +839,27 @@ export interface ModelCatalogSource {
         name: string;
         isFree?: boolean;
     }[];
+    /**
+     * ★ 本家目录里的**未决**活动候选（方案 A 的悬停出口）。
+     *
+     * ## 为什么必须有它
+     *
+     * 宿主徽标契约只有 `{ text, tone }`（实测 dsh-llm 0.2.2-rc.3：badge 的白名单只
+     * 写出这两格，`hover` / `tooltip` / `title` 在该文件里各 0 次命中），而上游那句
+     * 活动说明与有效期是**另一个字段**。于是 `conversation.input.model.label` 的
+     * 占位者要画悬停，只能自己拿到候选表。
+     *
+     * ⚠️ 交出去的是**未决候选**（`ModelPromotion` 原样），不是挑好的徽标：把徽标
+     * 在装配时刻定死并缓存正是 issue #101 要修的形态。渲染侧每次读自己的时钟。
+     *
+     * ⚠️ **同步、零网络**：读的是已落缓存的目录（与 `listAllModels()` 同一约束,
+     * 面板/选择器渲染路径会调它）。
+     *
+     * ⚠️ **可选成员**：只有目录里真的带活动数组的家实现（buddy 系 + qoder 系）。
+     * 其余家不实现 ⇒ 该 provider 不出现在结果里，客户端因此**回落到宿主自己的
+     * 徽标数据面**（`props.model.badge`），行为与加这条判据之前一致。
+     */
+    promotionCandidates?(): readonly PromotionCandidateRow[];
     /**
      * 「我这份 `listAllModels()` **确认**来自远端完整读取」的适配器自报钩子。
      *

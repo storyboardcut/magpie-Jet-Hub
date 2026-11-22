@@ -241,7 +241,12 @@ console.log(`  其中共享实现体的标签: ${fallThrough.length ? fallThroug
 // 控制台已按 14 家分档渠道接线 —— 见 console.js 的 BALANCE_TIERED_PROVIDERS）。
 // → 94（2026-11-11 本仓新增 `baizhi.setSession`：给已有账号补网页登录态。
 // 它落在 `startsWith('baizhi.')` 前缀改道里，所以是前缀 23 → 24、主 switch 不变）。
-const EXPECTED_RPC_METHOD_COUNT = 94
+// → 114（2026-11-22 自行跟进上游 1c3775b：上游 20 个新方法 —— account 轮换档位、
+// submitCallback 登录回调、promotion 徽标候选、qoderTrafficGuard / reasoningDefault
+// 开关、resume 限流续跑 5 件套、modelscope / zcode 手动签到、provider.closed 等。
+// 控制台按本仓口径全部登记进 HANDED_OFF（上游 Web UI 的功能，magpie 无对等入口），
+// 见 DROPPED 表 2026-11-22 批次；计数不变式是「解析没退化成空」的兜底）。
+const EXPECTED_RPC_METHOD_COUNT = 114
 ok(methods.length === EXPECTED_RPC_METHOD_COUNT,
   `本体可调度方法总数应为 ${EXPECTED_RPC_METHOD_COUNT}，实际 ${methods.length}（上游加减方法时必须同步这个常量）`)
 // baizhi.startSession 不走 `startsWith` 前缀，是单独一条 `if (method === '…')`；
@@ -491,6 +496,26 @@ const DROPPED = new Map([
   ...['catalog', 'expiryOrder', 'activeProvider', 'setOrderMode', 'clearRejected',
     'rejectNonExpiring', 'setAllowed', 'setRejected', 'setOrder']
     .map((m) => [`aggregate.${m}`, '聚合路由配置：magpie 侧没有对等入口，且插件不注册 aggregate']),
+  // ── 2026-11-22 批次：自行跟进上游 1c3775b 带进来的 17 个新方法 ──
+  // 都是上游 DSH Web UI 的功能，magpie 侧没有对等入口；控制台按本仓「能力最小面」
+  // 的既有口径不接，逐条记理由。哪天 magpie 出了对应界面，从这张表挪进 DELEGATED。
+  ['account.getRotation', '轮换档位读取：上游徽标/轮换策略的 UI 读数（rotationTierShiftHint 那套），控制台没有档位页'],
+  ['account.setRotation', '轮换档位设置：同上，magpie 无对等入口'],
+  ['account.submitCallback', 'OAuth 回调提交：上游 Web 登录流程的回调端点，magpie 登录走 auth.methods，控制台不代劳'],
+  ['login.submitCallback', '登录回调提交：同上'],
+  ['modelscope.autoCheckin', '手动触发签到：magpie 的签到走 auth.checkin 定时钩子，手动按钮无对等入口'],
+  ['zcode.autoCheckin', '手动触发签到：同上'],
+  ['promotion.candidates', '模型徽标候选：上游「促销徽标」UI 的数据源（LlmModelBadge 那套），magpie 模型列表不展示徽标'],
+  ['provider.closed', '供应商关闭意图读数：上游 UI 的开关状态源；控制台的供应商开关走 pool 直读'],
+  ['qoderTrafficGuard.getEnabled', 'Qoder 流量护栏开关：上游 UI 功能，magpie 无对等入口'],
+  ['qoderTrafficGuard.setEnabled', 'Qoder 流量护栏开关：同上'],
+  ['reasoningDefault.getEnabled', '推理档默认开关：上游 UI 功能，magpie 无对等入口'],
+  ['reasoningDefault.setEnabled', '推理档默认开关：同上'],
+  ['resume.fireNow', '限流续跑立即触发：上游 resume 五件套的 UI 功能，magpie 无对等入口'],
+  ['resume.forget', '限流续跑清档：同上'],
+  ['resume.getState', '限流续跑状态：同上'],
+  ['resume.setArmed', '限流续跑布防：同上'],
+  ['resume.setEnabled', '限流续跑开关：同上'],
 ])
 
 // 交给别人接的 + 主动弃用的，合起来才是「控制台不该再接」的全集。
@@ -845,41 +870,27 @@ if (!PROBE) {
     `REKEY_CHANNELS 的键（${a || '空'}）与 submitRekey 的 setApiKey 分支（${b || '空'}）必须一一对应`)
 }
 
-// ── 第 8 节：vendor 本地补丁必须还在（docs/vendor.md 的 7 类 / 13 个文件）──
+// ── 第 8 节：「全关即意图」语义必须还在（docs/vendor.md 差异表）──
 //
-// 这几条补丁打在**上游编译产物**上（`vendor/lib/*.js`），而 `docs/vendor.md`
-// 的同步流程是「clone 上游 → npm install → 整片拷进 vendor/」——
-// 也就是说下次按文档重跑同步，补丁会被**整片覆盖**，而且都**静默**：
+// 历史背景：这条语义最早是本仓补丁（2026-11-05，jet-hub-rpc.js + types.d.ts 两个
+// 补丁文件），2026-11-22 跟进上游 1c3775b 时**上游已原生吸收**（master 的
+// `model.setDisabledMany` 无条件在全量覆盖时补设意图，不再走 `closeProvider`
+// 参数）⇒ 两个补丁文件退役，vendor/lib/jet-hub-rpc.js 恢复上游原样。
+// 但语义必须仍然钉住：同步覆盖的不再可能是补丁（已不存在），而是**上游自己回退**
+// 这段逻辑 —— 那会复活 2026-11-05 用户报的「模型又显示已在 JetHub 关闭」死循环。
+// 断言对象从「补丁形态」改成「上游原生形态」，语义三要素不变：
 //
-//   - gemini 常量恢复明文 ⇒ 推 GitHub 时 push protection 拦截（本地一切正常）
-//   - magicrew 两条读凭据路径回到只读 localStorage ⇒ 真机「登录成功却读不到」
-//   - backup 少了 `keepDisabledModels` ⇒ 导入备份把本机模型黑名单整片关掉
-//   - `jet-hub-rpc` 少了「全关即意图」⇒ magpie 弹窗保存一次写满黑名单，**死循环**
-//   - `types.d.ts` 少了 `closeProvider` 类型 ⇒ 调用方按 `.d.ts` 传参报「对象字面量只能指定已知属性」
-//
-// 前三条的历史事故在各自文件里有长注释；第四条是 2026-11-05 用户报的
-// 「模型又显示已在 JetHub 关闭」。这里把「补丁还在」钉成断言，覆盖时立刻报红
-// 而不是等用户再撞一次。
+//   ① 判据 = 写入后黑名单**覆盖全量目录**（fullCatalogIds 纯净并集，空目录不算）
+//   ② 覆盖全量 ⇒ `writeModelsWithProviderClosed(provider, ids, true)` 同次落盘意图
+//   ③ 未覆盖全量 ⇒ 走原路径 `setModelsDisabled`（不顺带关供应商）
 {
   const rpc = read(RPC_JS)
-  ok(/本仓改动（2026-11-05）：第三参是「\*\*目标意图\*\*」/.test(rpc),
-    'vendor/lib/jet-hub-rpc.js 的「全关即意图」补丁还在（model.setDisabledMany）')
-  // ⚠️ 第三个实参必须由 `closeProvider` **决定**，**不能**写死 `true`。
-  // `writeModelsWithProviderClosed` 的第三参是三态目标意图：
-  // `true` 写入 / `false` **删除**该键 / `'keep'` **不动**该键。
-  //
-  // ⚠️ 这里必须写 `closeProvider ? true : 'keep'`，**不是** `closeProvider`：
-  // 上游把 `setAllDisabled` 改成三态之后，直接传布尔 `false` 会 `delete
-  // providerClosed[provider]` —— 把用户先前设好的「关闭供应商」意图**主动删掉**
-  // （2026-11-04 真机报障：「更新插件后停用的供应商被启用了」）。
-  ok(/writeModelsWithProviderClosed\(req\.provider, ids, closeProvider \? true : 'keep'\)/.test(rpc),
-    '… 且真的调了 writeModelsWithProviderClosed(provider, ids, closeProvider ? true : \'keep\')')
   ok(/const coversAll = catalog\.complete\s*&& catalog\.ids\.length > 0\s*&& catalog\.ids\.every\(\(id\) => after\[id\] === true\)/.test(rpc),
-    '… 判据用的是「写入后黑名单覆盖全量目录」（fullCatalogIds 的纯净并集，且空目录不算覆盖）')
-  // 契约本身也要钉住：`closeProvider` 必须从 `req` 读、默认 `true`。
-  // 只钉上面三条的话，把 `&& closeProvider` 删掉照样全绿。
-  ok(/const closeProvider = req\.closeProvider !== false;/.test(rpc),
-    '… `closeProvider` 从 `req` 取、不传默认 `true`（与 setAllDisabled 同一条契约）')
+    '「全关即意图」判据还在：写入后黑名单覆盖全量目录（fullCatalogIds 纯净并集，空目录不算覆盖）')
+  ok(/if \(coversAll\) \{\s*await pool\.writeModelsWithProviderClosed\(req\.provider, ids, true\);/.test(rpc),
+    '… 覆盖全量时同次落盘 writeModelsWithProviderClosed(provider, ids, true)')
+  ok(/else \{\s*await pool\.setModelsDisabled\(req\.provider, ids\);/.test(rpc),
+    '… 未覆盖全量时走原路径 setModelsDisabled（不顺带关供应商）')
 }
 
 console.log(failed === 0 ? `\n✓ RPC 口径一致：本体 ${methods.length} 个方法，控制台接 ${used.length} 个` : `\n✗ ${failed} 条失败`)

@@ -91,16 +91,21 @@ console.log('· 1  gemini 默认 client 常量：拆开了，且值没变')
     '… 且值未被等长替换（sha256 前 16 位）', fingerprint(GEMINI_DEFAULT_CLIENT_SECRET))
 }
 
-console.log('· 2  types.d.ts 的 closeProvider 契约（setAllDisabled / setDisabledMany 各一处）')
+console.log('· 2  types.d.ts 的 closeProvider 契约（上游原生形态）')
 {
+  // 2026-11-22 跟进上游 1c3775b：本仓 types.d.ts 补丁（给 setDisabledMany 加
+  // closeProvider 参数）退役 —— 上游已把「全关即意图」原生实现进 jet-hub-rpc.js，
+  // 不再需要 closeProvider 参数（fork 侧也没有任何调用传它）。
+  // 钉住的是**上游原生**状态：只有 setAllDisabled 一处声明，且 setDisabledMany
+  // 的请求体**没有**这个字段 —— 如果上游哪天删掉 setAllDisabled 的声明，
+  // 说明这段契约被回退，与 t-rpc-cover 第 8 节的语义断言一起红。
   const types = read(TYPES_DTS)
   const hits = [...types.matchAll(/closeProvider\?: boolean;/g)]
-  ok(hits.length === 2, '两个请求体都声明了 closeProvider?: boolean', `实际 ${hits.length} 处`)
-  // 只钉「有这两行」还不够：把字段挪到不相干的 interface 里也照样命中。
-  // 所以再确认它附近的注释还点着「与 setAllDisabled 同一条契约」—— 那是本仓补丁的
-  // 语义（默认 true、显式 false 才删意图），被覆盖时会一起丢。
-  ok(/与 \{\@link RpcModelSetAllDisabledRequest\.closeProvider\} 同一条契约/.test(types),
-    '… 且注释说明了「与 setAllDisabled 同一条契约」')
+  ok(hits.length === 1, '只有 setAllDisabled 请求体声明 closeProvider?: boolean（上游原生形态）', `实际 ${hits.length} 处`)
+  const many = types.indexOf('RpcModelSetDisabledManyRequest')
+  const manyBody = many >= 0 ? types.slice(many, types.indexOf('}', many)) : ''
+  ok(many > 0 && !/closeProvider/.test(manyBody),
+    '… 且 setDisabledMany 请求体没有 closeProvider（补丁确已退役）')
 }
 
 console.log('· 3  magicrew 两个 .d.ts 的声明与实现对齐（2026-11-08 P2-4 那类事故的复发面）')

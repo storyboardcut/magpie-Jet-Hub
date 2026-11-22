@@ -49,14 +49,17 @@ console.log('--- 1) credits.balances 的回包形状 ---')
   // handler 里那两行：`const value = usesWindow ? {...} : {...}` 然后 `return { ok: true, value }`
   const iValue = rpcSrc.indexOf('const value = usesWindow')
   ok(iValue > 0, '找到 credits.balances handler 里的 `const value = usesWindow`')
-  const tail = rpcSrc.slice(iValue, iValue + 400)
+  const tail = rpcSrc.slice(iValue, iValue + 2500)
   ok(
-    /\{\s*accounts:\s*values\s*\}/.test(tail),
-    'value 是 `{ accounts: values }` 对象（不是裸的 values）',
+    (tail.match(/accounts:\s*values/g) ?? []).length >= 2,
+    'value 的两个分支都带 `accounts: values`（对象载荷，不是裸的 values）',
   )
+  // 2026-11-22 跟进上游 1c3775b：窗口计算从 `buddyExpiringWindowDays()` 换成
+  // `resolveCreditWindow(provider, reader)`（per-provider 窗口 + imminentDays 预警，
+  // 上游 src/credit-window.ts），并新增可选 `fromCache` 磁盘缓存标记。钉住新契约：
   ok(
-    /windowDays:\s*buddyExpiringWindowDays\(\)/.test(tail),
-    '带窗口的渠道额外带 windowDays（说明 value 是对象而不是数组）',
+    /resolveCreditWindow\(req\.provider/.test(tail) && /windowDays:/.test(tail),
+    '带窗口的渠道走 resolveCreditWindow 并带 windowDays（说明 value 是对象而不是数组）',
   )
   const iReturn = rpcSrc.indexOf('return { ok: true, value }', iValue)
   ok(iReturn > 0, 'handler 返回 `{ ok: true, value }`')

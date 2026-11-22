@@ -27,6 +27,12 @@ for (const id of PROVIDER_IDS) {
 /** 本体 `accio`（magpie id `jet-hub-accio`）。 */
 export const JetHubAccioPlugin = byId.get('jet-hub-accio')
 
+/** 本体 `agnescode`（magpie id `jet-hub-agnescode`，AgnesCode 国内站，2026-11-22 跟进上游 1c3775b）。 */
+export const JetHubAgnescodePlugin = byId.get('jet-hub-agnescode')
+
+/** 本体 `agnescodeintl`（magpie id `jet-hub-agnescodeintl`，AgnesCode 国际站）。 */
+export const JetHubAgnescodeintlPlugin = byId.get('jet-hub-agnescodeintl')
+
 /** 本体 `astudio`（magpie id `jet-hub-astudio`）。 */
 export const JetHubAstudioPlugin = byId.get('jet-hub-astudio')
 

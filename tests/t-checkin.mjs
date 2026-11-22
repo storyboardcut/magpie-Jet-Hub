@@ -180,10 +180,11 @@ if (typeof toMagpieCheckin === 'function') {
       for (const q of (ls[1] ?? '').matchAll(/'([^']+)'|"([^"]+)"/g)) branches.push(q[1] ?? q[2])
     }
     ok(
-      // 大小写不敏感：等价写法 `=== ZCODE.id` 与 `=== 'zcode'` 都该放行（否则纯重构假红），
-      // 但 `NEWSENSE` / `'lobsterai'` 这种**真的第四条**仍要红。
-      branches.length <= 1 && branches.every((n) => n.toLowerCase() === 'zcode'),
-      `claimAll 里的「按 provider 特判」只应有 ZCODE 一条，实际：${branches.join(', ') || '无'}`,
+      // 大小写不敏感：等价写法 `=== ZCODE.id` 与 `=== 'zcode'` 都该放行（否则纯重构假红）。
+      // 2026-11-22 跟进上游 1c3775b：上游给 claimAll 加了 MODELSCOPE 特判
+      // （claimModelscopeDaily 走 magicube 会话，与通用表路径不同源）⇒ 放行两条。
+      branches.length <= 2 && branches.every((n) => ['zcode', 'modelscope'].includes(n.toLowerCase())),
+      `claimAll 里的「按 provider 特判」只应 zcode / modelscope 两条，实际：${branches.join(', ') || '无'}`,
     )
     ok(/isQoderFamily\(req\.provider\)/.test(seg), 'claimAll 里的 Qoder 家族特例还在（isQoderFamily）')
     ok(/creditsOf\(credits, req\.provider\)/.test(seg), 'claimAll 里的能力表判据还在（creditsOf(...).claim）')
@@ -240,7 +241,10 @@ if (typeof toMagpieCheckin === 'function') {
   // 反向固定几个代表：文档与答复里点过名的，别让判据整体漂掉
   // 2026-11-02 上游同步：magicrew 系新增了 claimMagicrewLoginGift / claimMagicrewOnboardingTasks，
   // 在 provider-credits 表里已带 claim ⇒ 从「不该声明」名单移除。
-  const unsupported = ['jet-hub-cline', 'jet-hub-workbuddy', 'jet-hub-raccoon', 'jet-hub-modelscope', 'jet-hub-opencode', 'jet-hub-officeace', 'jet-hub-accio', 'jet-hub-gemini']
+  // 2026-11-22 跟进上游 1c3775b：workbuddy / raccoon / modelscope 也拿到了 claim
+  // （raccoon-credits 的 claimRaccoonDailyCheckin、modelscope-checkin 的 claimModelscopeDaily、
+  // workbuddy-intl-activity）⇒ 同样从「不该声明」名单移除，只留真没有的 5 家。
+  const unsupported = ['jet-hub-cline', 'jet-hub-opencode', 'jet-hub-officeace', 'jet-hub-accio', 'jet-hub-gemini']
   for (const id of unsupported) {
     const [, fn] = mod.PLUGINS.find(([i]) => i === id)
     const plugin = await fn({}, iso.options())
@@ -254,20 +258,16 @@ if (typeof toMagpieCheckin === 'function') {
   }
 }
 
-// ---- 3) 不支持的渠道连方法都不该有 -----------------------------------------
+// ---- 3) 能力方向锚点：不真调，只查方法在不在 --------------------------------
 //
-// ⚠️ 这一节**不能**去调 `workbuddy.auth.checkin(...)`：`4fd1677` 起 workbuddy
-// 不声明 checkin（上游没有签到实现），方法不存在 ⇒ 调用是 `TypeError`。
-// 而这行带 `await`、外层又是顶层 `if (live())`，于是整个文件会**崩溃**而不是报断言
-// —— 2026-11-01 补审实测：`workbuddy: checkin= undefined`，`JET_HUB_LIVE=1` 直接抛。
-//
-// 现在只断言「方法在不在」，不发任何 RPC、不需要真凭据，所以不再需要 opt-in ——
-// 也就**不要**再调 `skipLive()`：那会让 `scripts/test-all.mjs` 的汇总行永远挂着
-// 「设 JET_HUB_LIVE=1 才会跑」，而这一节再也不会因为那个变量而跑（假承诺）。
+// ⚠️ 不真调 checkin：那会真的给账号领积分。
+// 2026-11-22 跟进上游 1c3775b：上游给 workbuddy 补了活动/签到路径
+// （workbuddy-intl-activity 进了 provider-credits 表）⇒ workbuddy 现在必须声明
+// auth.checkin（方向反转，原断言见 git 历史）。
 {
   const [, wb] = mod.PLUGINS.find(([i]) => i === 'jet-hub-workbuddy')
   const wbPlugin = await wb({}, iso.options())
-  ok(typeof wbPlugin.auth.checkin !== 'function', 'workbuddy 不该有 auth.checkin（上游没有签到实现）')
+  ok(typeof wbPlugin.auth.checkin === 'function', 'workbuddy 必须有 auth.checkin（2026-11-22 上游补了实现）')
   // 真支持签到的家必须有。这里只查形状、不真调 —— 真调会真的给账号领积分。
   const [, tr] = mod.PLUGINS.find(([i]) => i === 'jet-hub-trae')
   const trPlugin = await tr({}, iso.options())

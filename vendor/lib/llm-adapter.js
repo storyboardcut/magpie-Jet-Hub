@@ -1,5 +1,6 @@
 import { attributionHeaders, CONTEXT_WINDOW_EXCEEDED_CODE, isContextWindowExceededError, isQuotaExceededError, LlmAdapter, LlmError, } from '@deepseek-ai/dsh-llm';
 import { ReasoningEffortId, ToolCallId } from '@deepseek-ai/dsh-llm';
+import { isInsideAggregateDispatch } from './aggregate-dispatch-context.js';
 import { createModelCatalog, isCatalogFreshFor } from './model-catalog.js';
 import { RemoteCatalogGate } from './remote-catalog-gate.js';
 import { broadcastCatalogChanged } from './catalog-broadcast.js';
@@ -33,6 +34,7 @@ import { planSessionTitleThinking } from './session-title.js';
 import { registerAdapterIdempotent, } from './llm-register-compat.js';
 import { CODEARTS_PROVIDER, codeartsAcceptsImage, codeartsVisionModel } from './codearts-vision.js';
 import { reportLedgerAccount } from './token-ledger.js';
+import { readCacheTokenCount } from './cache-token-count.js';
 export const CHAT_API_BASE = 'https://snap-access.cn-north-4.myhuaweicloud.com/api/v2';
 /**
  * CodeArts 推理请求的 `User-Agent` —— **必须是官方客户端的身份**。
@@ -361,6 +363,24 @@ export const DEFAULT_MODELS = [
     'GLM-5.2', 'GLM-5.1',
     'glm-5.3', 'glm-5.2-sft-harmony',
     'openpangu-2.0-flash', 'openpangu-2.0-pro',
+    /**
+     * ★ `openpangu-2.1-pro`（2026-11-22 用户报障：IDE 有、插件没有）。
+     *
+     * **这是静态表必然腐坏的又一例**：远端 `/v1/model/builtin` 当天已下发它
+     *（`context_window: 524288`、`ratio_display: 0.07x`），而本表是**手工维护**的
+     * ⇒ 新模型上线后没人加，用户在选择器里就看不到。
+     *
+     * ⚠️ 本表的**根本问题**不是「少了哪一个」，而是「远端明明有、我们却抄一份」。
+     * 真正的修法是让目录走远端（那条端点**确实下发 `context_window`**，
+     * 见下方 `CONTEXT_WINDOWS` 里已作废的注释）—— 那是架构改动，未在本轮做。
+     */
+    'openpangu-2.1-pro',
+    /**
+     * `glm-5.3-flash`：**`CONTEXT_WINDOWS` 里早就有它的窗口（1_048_576），
+     * 但它一直不在本表** ⇒ 窗口白配、用户也选不到。
+     *（同一类漏加，一并补上。）
+     */
+    'glm-5.3-flash',
     'deepseek-v4-flash', 'deepseek-v4.1-flash', 'deepseek-v4.1-flash-1017',
 ];
 /**
@@ -408,6 +428,10 @@ const CONTEXT_WINDOWS = new Map([
     ['glm-5.2-sft-harmony', 202_752],
     ['openpangu-2.0-flash', 524_288],
     ['openpangu-2.0-pro', 524_288],
+    // ⚠️ 2026-11-22 补：远端 `/v1/model/builtin` 当天实测 `context_window: 524288`
+    //    （`ratio_display: 0.07x`）。漏这一行会让它走 524_288 的具名兜底 —— 巧合对了，
+    //    但「巧合」不是判据：上游哪天改窗口，这里就会**静默**错误 2 倍。
+    ['openpangu-2.1-pro', 524_288],
     ['deepseek-v4-flash', 1_048_576],
     ['deepseek-v4-pro', 1_048_576],
     ['deepseek-v4.1-flash', 1_048_576],
@@ -861,6 +885,54 @@ const CODEARTS_CONCURRENCY_LIMIT_CODE = 'TM.00001041';
  */
 const CODEARTS_TENANT_NOT_ENABLED_CODE = 'TM.000010051';
 /**
+ * 「**账号积分已耗尽**」的业务码（真实报障 2026-11-15）。
+ *
+ * ```text
+ * HTTP 400  {"error_code":"TM.00001050","error_msg":"您的积分已耗尽，请关注活动积分领取活动…"}
+ * ```
+ *
+ * ## ⚠️⚠️ 这个码此前**无人认识** ⇒ 「积分用完不换号」整块静默失效
+ *
+ * 既有的 `4291`（`InferHub.4291.200`）与 `insufficient quota` 是 2026-10-02 从
+ * **benefit 免费额度**那条通道取的证；而**账号积分**耗尽走的是**另一条通道、
+ * 另一个码族**（`TM.*`，与 {@link CODEARTS_CONCURRENCY_LIMIT_CODE} 同族）。
+ *
+ * 2026-11-15 用真实凭据直连实测（2 个账号逐个请求：积分耗尽的账号请求
+ * `glm-5.3` 回本码；`codearts-credit-exhausted-rotation.spec.ts` 只把
+ * `glm-5.3` 这一格做成了用例，其余模型是**人工观察**、仓内没有可复现的探针），
+ * 而旧判据对它**零命中** ⇒ 请求落进
+ * 通用 4xx 分支 ⇒ **既不写 `modelRateLimits`、也不调 `getAvailableAccount`**
+ * ⇒ 用户看到的就是「一个账号积分用完后竟然不会切换账号」。
+ *
+ * ## ⚠️ 必须走 {@link hasBusinessCode} 的数字边界，绝不能用「按词干匹配」
+ *
+ * 它和 {@link CODEARTS_TENANT_NOT_ENABLED_CODE}（`TM.000010051`，「您当前无权
+ * 调用该模型」）**共享 9 字符词干 `TM.000010`** 后分叉（`50` vs `051`），
+ * 而且两个码**实测在同一批请求里同时出现**（同一个积分耗尽的账号：请求
+ * `glm-5.2` 回 `TM.000010051`，请求 `glm-5.3` 回 `TM.00001050`）。
+ *
+ * 所以「图省事匹配 `TM.000010` 前缀」这条捷径**真实可达**：它会把
+ * 「无权限」误判成「没钱」⇒ 对着一个**永远不会有积分**的模型把整池账号
+ * 轮一遍并全部沉底（比不换号更糟）。
+ *
+ * ⚠️ **如实纠正一处我先写错的措辞**：原文写「独立用例锁住了这条词干
+ * （按词干匹配的变异实测变红 2 处）」—— 不实。审计实测：**单拆任一条腿**
+ *（把词干改成 `TM.000010`、或删掉 `(?![0-9])` 边界）都**全绿**；只有
+ * **两条一起改**（词干 + 去边界）才红 2 处。原因很直接：词干 `TM.000010`
+ * 本来就是 `TM.00001050` 的真前缀，配上数字边界后与全等**逐字节等价** ——
+ * 那是**等价变异**，不是「用例守住了它」。真正的守卫是
+ * `TM.000010051`（「无权调用」）那两条反例用例。
+ *
+ * ⚠️ 如实标注一个我**先写错、后被变异测试纠正**的细节：两者**不是**严格前缀
+ * 关系（`'TM.000010051'.includes('TM.00001050')` 实测为 `false` —— 第 10 位
+ * `0` vs `5` 已分叉）。真正的风险面是**词干**，不是前缀；结论（必须走数字
+ * 边界）不变，但按前缀叙述会把变异锚点指错。
+ *
+ * 这条与 {@link isSseQueueErrorCode} 的 `429`/`4291`、{@link hasBusinessCode}
+ * 注释里 `TM.00000001`/`TM.000000011` 是**同一族**陷阱，本仓库第 4 次复发。
+ */
+const CODEARTS_CREDIT_EXHAUSTED_CODE = 'TM.00001050';
+/**
  * 错误体里是否带某个**精确**业务码（数字后缀必须断开）。
  *
  * ## ⚠️ 为什么不能用裸 `body.includes(code)`
@@ -1038,9 +1110,121 @@ export function isSseQueueErrorCode(code) {
  *
  * 文案兜底（`insufficient quota`）不可省：万一上游换了码值，序列化后的
  * detail 文本仍能命中 —— 与 `zcode` / `qoder` 的既有做法一致。
+ *
+ * ## ⚠️⚠️ 2026-11-15：`4291` 只覆盖 benefit 通道，**账号积分耗尽走 `TM.00001050`**
+ *
+ * 真实报障「一个账号的积分用完后竟然不会切换账号」的**根因就是这里**：
+ * 积分耗尽回的是 `HTTP 400 {"error_code":"TM.00001050","error_msg":"您的积分已耗尽…"}`，
+ * 而旧的这两条腿对它**零命中** ⇒ 报文落进通用 4xx 分支 ⇒ 既不写
+ * `modelRateLimits`、也不调 `getAvailableAccount` ⇒ 换号整块静默失效
+ * （实测 `state.json` 里 codearts 两个账号**连 `modelRateLimits` 键都没有**）。
+ *
+ * 补的三条腿各有分工，**每条都有独立用例**（`codearts-credit-exhausted-rotation.spec.ts`
+ * 用一个 `it.each` 分别只喂 `code`、只喂 `message`、只喂中文文案 —— 审计指出
+ * 原先只有「组合输入」的用例，两条码值腿各自删掉都 6/6 全绿）：
+ *
+ * | 通道 | `code` 入参 | `message` 入参 | 由哪条腿命中 |
+ * |---|---|---|---|
+ * | SSE（200 首帧） | `data.error_code`（`TM.00001050`） | `data.error_msg` | `hasBusinessCode(code)` |
+ * | HTTP 4xx | `errorDetailForClassify(body)`（**可能为空串**） | 报文全文 | `hasBusinessCode(message)` |
+ * | 上游改码值 | 任意 | 中文文案 | `CREDIT_EXHAUSTED_PATTERN` |
+ *
+ * ⚠️ 码值腿**必须**走 {@link hasBusinessCode} 的数字边界：`TM.00001050` 与
+ * `TM.000010051`（「无权调用该模型」）**共享 9 字符词干 `TM.000010`** 后分叉，
+ * 两者实测在同一批请求里同时出现（同一账号 `glm-5.2` 回 `1051`、`glm-5.3`
+ * 回 `1050`）。按词干匹配会把「无权限」判成「没钱」⇒ 对一个**永远不会有积分**
+ * 的模型把整池账号轮一遍并全部沉底 ⇒ 比不换号更糟。
+ *
+ * ⚠️ 文案腿刻意复用共享常量 {@link CREDIT_EXHAUSTED_PATTERN}（它已认识
+ * 「积分已耗尽 / 额度用尽 / 余额不足」，2026-11-15 node 实测确认），
+ * **不在这里另写第二份中文正则** —— 两份同义判据必然漂移。
  */
 export function isSseQuotaExhaustedErrorCode(code, message) {
+    // 「账号积分」与「benefit 免费额度」是**同一个用户动作**（换号），
+    // 但**出路不同**（充值 vs 等重置）⇒ 两条腿并列，各自只留一份实现。
+    return isBenefitQuotaExhausted(code, message) || isCreditExhaustedQuota(code, message);
+}
+/**
+ * 错误体是否命中「benefit **免费额度**用尽」这条腿（2026-10-02 取证）。
+ *
+ * 单独成函数而不内联，是因为**文案分流要以它为先手**：上游可能发出一份
+ * 同时含 `InferHub.4291.200` 与英文 `quota exhausted` 的报文，而
+ * {@link CREDIT_EXHAUSTED_PATTERN} 认得 `quota exhausted` —— 那样两族会同时命中。
+ * 此时必须判成 benefit（码值比散文可信），否则用户会看到「去充值」而其实
+ * 等一天就恢复了。
+ */
+export function isBenefitQuotaExhausted(code, message) {
     return code.includes('4291') || /insufficient[\s_-]+quota/i.test(message);
+}
+/**
+ * 错误体是否命中「**账号积分**耗尽」这条腿（而不是 benefit 免费额度）。
+ *
+ * ## 为什么必须与 {@link isSseQuotaExhaustedErrorCode} 分开
+ *
+ * 两者都表示「额度没了、要换号」，但**给用户的话完全不同**：
+ *
+ * | 条件 | 真实出路 | 说错话的后果 |
+ * |---|---|---|
+ * | benefit 免费额度用尽 | 等 UTC+8 次日重置（或换号） | —— |
+ * | **账号积分**耗尽 | **去 CodeArts 充值 / 领积分**（不会自己回来） | 让用户干等一整天，而额度永远不回来 |
+ *
+ * 2026-11-01 那次修复把新码接进换号分支后，文案仍然走
+ * {@link codeartsQuotaExhaustedMessage}（正文逐字写「免费额度（benefit）已用尽，
+ * 预计…后重置」）—— 对积分耗尽**是错的**，违反本仓库「文案本身就是出路」红线。
+ *
+ * ## 判据
+ *
+ * 只有「积分族」的三条腿算：两个码值腿 + 中文/英文文案腿。
+ * benefit 的 `4291` 与 `insufficient quota` **刻意不算**。
+ *
+ * ⚠️ 纯文案腿**先排除 benefit 缺失报文**（`InferHub.4004.200`）：那种报文该走
+ * 「去头重试一次」，不是「换号」。若上游把 benefit 缺失也改成中文措辞
+ *（如「免费额度已用尽」），`CREDIT_EXHAUSTED_PATTERN` 会命中 —— 那时会把
+ * 一次本来能自愈的请求误判成「没钱」并轮完整池。这条豁免是审计点出来的
+ * **顺序风险**，今天不可达（benefit 报文实测只带英文/码值），但加到这里是零成本的。
+ */
+export function isCreditExhaustedQuota(code, message) {
+    // ⚠️ benefit 码优先：它比散文可信（见 isBenefitQuotaExhausted 的说明）。
+    if (isBenefitQuotaExhausted(code, message))
+        return false;
+    if (hasBusinessCode(code, CODEARTS_CREDIT_EXHAUSTED_CODE))
+        return true;
+    if (hasBusinessCode(message, CODEARTS_CREDIT_EXHAUSTED_CODE))
+        return true;
+    // ⚠️ 纯文案腿放最后，且先排除 benefit 缺失报文（见上）。
+    if (isBenefitNotFoundBody(message))
+        return false;
+    // ⚠️⚠️ 再排除「**不是额度问题**」但撞上共享正则的文案（审计 P2-③）：
+    // `CREDIT_EXHAUSTED_PATTERN` 里有一条 `余额.{0,4}(?:不足|耗尽|用尽)`，而
+    // 「您的余额不足，请先**完成实名认证**后重试」会被它命中 ⇒ 判成积分耗尽 ⇒
+    // 换号 + 给失败账号写 `modelRateLimit`（UTC+8 次日 0 点）⇒ **一个与账号
+    // 无关的问题把账号在该模型上沉底一整天**，用户还只看到「积分已耗尽」。
+    //
+    // 那条正则原本只服务 buddy `14018` 的**展示**向判据（`isCreditExhausted`），
+    // 本 PR 把它带进了「换号 + 写冷却」这条**有副作用**的路径 —— 这是本次
+    // 修复引入的放大面，必须在这里挡掉。
+    if (NOT_QUOTA_RELATED_PATTERN.test(message))
+        return false;
+    return CREDIT_EXHAUSTED_PATTERN.test(message);
+}
+/**
+ * 撞上额度正则、但语义上**与额度无关**的文案（实测把失败账号沉底一整天）。
+ *
+ * 只收「任何账号都救不了、充值也没用」的那类：实名/身份认证。刻意窄 ——
+ * 每加一条就多一个「本该死却不死」的漏判面。
+ */
+const NOT_QUOTA_RELATED_PATTERN = /实名认证|实名验证|身份认证/;
+/**
+ * 「**账号积分**已耗尽」的用户可见文案。
+ *
+ * 与 {@link codeartsQuotaExhaustedMessage} 的**唯一区别**：**不承诺任何重置时刻**。
+ * 积分是充值 / 活动领来的，用完不会自己回来 —— 写「预计 N 后重置」等于告诉用户
+ * 在等一个永不到来的时刻。
+ */
+export function codeartsCreditExhaustedMessage(model) {
+    return (`codearts: 模型 ${model} 的**账号积分**已用尽（上游 error_code TM.00001050），`
+        + '积分需要充值或领取活动积分才会增加，不会按日自动恢复。'
+        + '可改用其它模型，或在 Jet Hub 的 CodeArts 面板切换/添加账号。');
 }
 /**
  * HTTP **4xx** 报文里是否表示「该账号没有 benefit（免费额度）包」。
@@ -1730,6 +1914,21 @@ export class CodeArtsAdapter extends LlmAdapter {
             // 拿不到判定时退回 `got`（= 旧行为），避免把「判不出」当成「残缺」
             // 而让每个 provider 都反复重拉。
             this.remoteComplete = this.options.catalogComplete?.() ?? true;
+            /**
+             * ★ **落盘（SWR 写盘那一半）** —— 2026-11-20，与 `buddy-adapter` 同款。
+             *
+             * ⚠️ **只在 `remoteComplete` 时写**：残缺目录落盘会被固化，下次启动读到它
+             * ⇒ 缺失的模型永久消失（见 `model-catalog-cache.ts` 模块头）。
+             *
+             * ⚠️⚠️ **必须用 `syncCatalogEntries()` 而不是 `catalogEntries()`**：
+             * 后者是 `async` 且内部 `await this.ensureRemoteModels()` —— 我们此刻
+             * **正在** `ensureRemoteModels` 里面，再调它会造成重入（闸门的 `inFlight`
+             * 会返回自己那轮的 Promise ⇒ 自等死锁）。
+             * 而 `syncCatalogEntries()` 读的就是刚赋好的 `this.remoteModels`，正是要写盘的内容。
+             */
+            if (this.remoteComplete) {
+                this.catalog.rememberForDisk?.(this.syncCatalogEntries());
+            }
             return { got: true, complete: this.remoteComplete };
         });
     }
@@ -1820,6 +2019,13 @@ export class CodeArtsAdapter extends LlmAdapter {
         return {
             id: model.id,
             name,
+            // ⚠️ 上游 `model_desc`（模型介绍）**原样透传**（2026-11-17 接）：
+            //    它是 CodeArts 客户端选择器里那行灰字的来源，落点是宿主
+            //    `LlmModelInfo.description` 与 Jet Hub 模型面板的第二行
+            //    （见 `src/models.ts` 的 `RemoteModel.description`）。
+            //    ⚠️ 三态：`undefined` ⇒ **不落键**（不写空串，否则「没有介绍」
+            //    与「介绍是空的」在客户端同形）。也**绝不**据此推断活动窗口。
+            ...(model.description === undefined ? {} : { description: model.description }),
             // ⚠️ `resolveModel` 用的**裸名**（不含倍率）—— 价格只属于选择列表语境
             //    （与 loomy / raccoon / trae / lobsterai 同款，见 `model-catalog.ts`
             //    的 `bareName` 字段注释）。
@@ -1980,10 +2186,10 @@ export class CodeArtsAdapter extends LlmAdapter {
         };
     }
     async *stream(options) {
-        let credential = await this.options.resolveCredential();
+        let credential = await this.options.resolveCredential(options.model, options.sessionId);
         if (credential === undefined || Date.parse(credential.expires_at) <= Date.now()) {
             await this.options.refresh();
-            credential = await this.options.resolveCredential();
+            credential = await this.options.resolveCredential(options.model, options.sessionId);
         }
         if (credential === undefined || !credential.access_key_id || !credential.secret_access_key || !credential.security_token) {
             throw new LlmError('codearts: no usable credential; log in first', 'MISSING_CREDENTIAL');
@@ -2523,7 +2729,7 @@ export class CodeArtsAdapter extends LlmAdapter {
                 if (isAuthError(response.status, errorText) && !authRefreshed) {
                     authRefreshed = true;
                     await this.options.refresh();
-                    credential = await this.options.resolveCredential();
+                    credential = await this.options.resolveCredential(options.model, options.sessionId);
                     if (credential === undefined || !credential.access_key_id || !credential.secret_access_key || !credential.security_token) {
                         throw new LlmError('codearts: credential missing after refresh; log in again', 'MISSING_CREDENTIAL');
                     }
@@ -2542,7 +2748,14 @@ export class CodeArtsAdapter extends LlmAdapter {
                 // ⚠️ **分类必须走 `errorDetailForClassify`**（不含 detail 腿）—— 理由同上，
                 // 用展示出口会让 detail 里的额度措辞翻转这条判据。
                 if (isSseQuotaExhaustedErrorCode(errorDetailForClassify(errorText), errorText)) {
-                    const message = codeartsQuotaExhaustedMessage(options.model, nextUtc8DayStartMs());
+                    // ⚠️ 文案必须按**哪条腿命中**分流（审计 P1-1）：
+                    // 积分耗尽的用户需要去充值，而他看到的若是「免费额度已用尽，预计…后重置」
+                    // 就会干等一整天 —— 那笔额度永远不会回来。判据复用同一个函数，
+                    // 不在这里内联第二份（两份同义判据必然漂移）。
+                    const creditExhausted = isCreditExhaustedQuota(errorDetailForClassify(errorText), errorText);
+                    const message = creditExhausted
+                        ? codeartsCreditExhaustedMessage(options.model)
+                        : codeartsQuotaExhaustedMessage(options.model, nextUtc8DayStartMs());
                     if (this.options.accountPool) {
                         if (currentAccountId) {
                             await this.options.accountPool.updateModelRateLimit(currentAccountId, options.model, nextUtc8DayStartMs());
@@ -2725,6 +2938,16 @@ export class CodeArtsAdapter extends LlmAdapter {
             // 保持静默，web 显示 harness 自身的"运行中"状态。每次重试前查询
             // 状态端点：终态（error/queue_full）立即抛错，其余情况
             // （waiting/working/端点不可达）等待后直接重试 chat。
+            //
+            // ⚠️⚠️ **聚合调用不等待，立刻按 `QUEUE` 失败**（2026-11-14，与 qoder 同一故障形态）：
+            //    聚合只在候选**报错**时切换下一个候选，而这里的排队是**静默**重试（最长
+            //    30 分钟、不产出任何帧）⇒ 聚合等不到错误，请求被锁死在本渠道，客户端一个字节
+            //    都收不到。判据见 `aggregate-dispatch-context.ts`；直连 codearts 时没有
+            //    「下一个候选」，仍走下方的排队等待，行为不变。
+            if (isInsideAggregateDispatch()) {
+                console.warn(`[codearts] 上游排队（${options.model}）：聚合调用不等待，交由聚合切换下一个候选`);
+                throw new LlmError(`codearts: 上游模型排队中（${options.model}，聚合调用不等待，交由聚合切换下一个候选）`, 'QUEUE');
+            }
             queueAttempts += 1;
             if (queueAttempts > QUEUE_MAX_ATTEMPTS) {
                 throw new LlmError('codearts: queue wait timed out after 30 minutes', 'QUEUE');
@@ -3168,17 +3391,16 @@ export class CodeArtsAdapter extends LlmAdapter {
                     }
                     if (data.usage) {
                         const promptTokens = data.usage.prompt_tokens ?? 0;
-                        const cachedTokens = data.usage.prompt_tokens_details?.cached_tokens
-                            ?? data.usage.prompt_cache_hit_tokens
-                            ?? 0;
+                        const cachedTokens = readCacheTokenCount(data.usage.prompt_tokens_details?.cached_tokens)
+                            ?? readCacheTokenCount(data.usage.prompt_cache_hit_tokens);
                         const cacheWriteTokens = data.usage.prompt_tokens_details?.cache_write_tokens;
                         const reasoningTokens = data.usage.completion_tokens_details?.reasoning_tokens;
                         yield {
                             type: 'usage',
                             usage: {
-                                inputTokens: cachedTokens > 0 ? promptTokens - cachedTokens : promptTokens,
+                                inputTokens: promptTokens - (cachedTokens ?? 0),
                                 outputTokens: data.usage.completion_tokens ?? 0,
-                                ...cachedTokens > 0 ? { cacheReadTokens: cachedTokens } : {},
+                                ...cachedTokens !== undefined ? { cacheReadTokens: cachedTokens } : {},
                                 ...cacheWriteTokens !== undefined && cacheWriteTokens > 0 ? { cacheWriteTokens } : {},
                                 ...reasoningTokens !== undefined && reasoningTokens > 0 ? { reasoningTokens } : {},
                             },

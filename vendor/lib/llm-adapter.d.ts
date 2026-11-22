@@ -231,7 +231,18 @@ export declare function codeartsContextWindow(modelId: string): number;
 export declare function codeartsRateSuffix(display: string): string | undefined;
 export interface CodeArtsAdapterOptions {
     credentialRef: CredentialRef;
-    resolveCredential: () => Promise<CodeArtsCredential | undefined>;
+    /**
+     * ⚠️⚠️ **第二参 `sessionId` 是「轮换起点」的作用域键**（PR #59 正向审计 P1-b）。
+     *
+     * 适配器必须把 `GenerateOptions.sessionId` 透传进来，否则选号层的
+     * `preferredRotationFor(provider, sessionId)` 永远拿到 `undefined` ⇒
+     * 面板上选好的起点**完全不生效**（且零报错、tsc 也不报 —— 函数参数逆变，
+     * 签名少一个参数在 TypeScript 里是合法的）。
+     *
+     * 同一个坑在同仓 10 个适配器上已经踩过一轮（`rotation-session-id-wiring.spec.ts`
+     * 的 `ADAPTERS` 守着它们）；codearts 原先不在那张表里，故结构性看不见。
+     */
+    resolveCredential: (modelId?: string, sessionId?: string) => Promise<CodeArtsCredential | undefined>;
     refresh: () => Promise<void>;
     /** 动态拉取远端模型列表；失败时调用方回退到静态列表。 */
     fetchRemoteModels?: () => Promise<RemoteModel[]>;
@@ -533,8 +544,82 @@ export declare function isSseQueueErrorCode(code: string): boolean;
  *
  * 文案兜底（`insufficient quota`）不可省：万一上游换了码值，序列化后的
  * detail 文本仍能命中 —— 与 `zcode` / `qoder` 的既有做法一致。
+ *
+ * ## ⚠️⚠️ 2026-11-15：`4291` 只覆盖 benefit 通道，**账号积分耗尽走 `TM.00001050`**
+ *
+ * 真实报障「一个账号的积分用完后竟然不会切换账号」的**根因就是这里**：
+ * 积分耗尽回的是 `HTTP 400 {"error_code":"TM.00001050","error_msg":"您的积分已耗尽…"}`，
+ * 而旧的这两条腿对它**零命中** ⇒ 报文落进通用 4xx 分支 ⇒ 既不写
+ * `modelRateLimits`、也不调 `getAvailableAccount` ⇒ 换号整块静默失效
+ * （实测 `state.json` 里 codearts 两个账号**连 `modelRateLimits` 键都没有**）。
+ *
+ * 补的三条腿各有分工，**每条都有独立用例**（`codearts-credit-exhausted-rotation.spec.ts`
+ * 用一个 `it.each` 分别只喂 `code`、只喂 `message`、只喂中文文案 —— 审计指出
+ * 原先只有「组合输入」的用例，两条码值腿各自删掉都 6/6 全绿）：
+ *
+ * | 通道 | `code` 入参 | `message` 入参 | 由哪条腿命中 |
+ * |---|---|---|---|
+ * | SSE（200 首帧） | `data.error_code`（`TM.00001050`） | `data.error_msg` | `hasBusinessCode(code)` |
+ * | HTTP 4xx | `errorDetailForClassify(body)`（**可能为空串**） | 报文全文 | `hasBusinessCode(message)` |
+ * | 上游改码值 | 任意 | 中文文案 | `CREDIT_EXHAUSTED_PATTERN` |
+ *
+ * ⚠️ 码值腿**必须**走 {@link hasBusinessCode} 的数字边界：`TM.00001050` 与
+ * `TM.000010051`（「无权调用该模型」）**共享 9 字符词干 `TM.000010`** 后分叉，
+ * 两者实测在同一批请求里同时出现（同一账号 `glm-5.2` 回 `1051`、`glm-5.3`
+ * 回 `1050`）。按词干匹配会把「无权限」判成「没钱」⇒ 对一个**永远不会有积分**
+ * 的模型把整池账号轮一遍并全部沉底 ⇒ 比不换号更糟。
+ *
+ * ⚠️ 文案腿刻意复用共享常量 {@link CREDIT_EXHAUSTED_PATTERN}（它已认识
+ * 「积分已耗尽 / 额度用尽 / 余额不足」，2026-11-15 node 实测确认），
+ * **不在这里另写第二份中文正则** —— 两份同义判据必然漂移。
  */
 export declare function isSseQuotaExhaustedErrorCode(code: string, message: string): boolean;
+/**
+ * 错误体是否命中「benefit **免费额度**用尽」这条腿（2026-10-02 取证）。
+ *
+ * 单独成函数而不内联，是因为**文案分流要以它为先手**：上游可能发出一份
+ * 同时含 `InferHub.4291.200` 与英文 `quota exhausted` 的报文，而
+ * {@link CREDIT_EXHAUSTED_PATTERN} 认得 `quota exhausted` —— 那样两族会同时命中。
+ * 此时必须判成 benefit（码值比散文可信），否则用户会看到「去充值」而其实
+ * 等一天就恢复了。
+ */
+export declare function isBenefitQuotaExhausted(code: string, message: string): boolean;
+/**
+ * 错误体是否命中「**账号积分**耗尽」这条腿（而不是 benefit 免费额度）。
+ *
+ * ## 为什么必须与 {@link isSseQuotaExhaustedErrorCode} 分开
+ *
+ * 两者都表示「额度没了、要换号」，但**给用户的话完全不同**：
+ *
+ * | 条件 | 真实出路 | 说错话的后果 |
+ * |---|---|---|
+ * | benefit 免费额度用尽 | 等 UTC+8 次日重置（或换号） | —— |
+ * | **账号积分**耗尽 | **去 CodeArts 充值 / 领积分**（不会自己回来） | 让用户干等一整天，而额度永远不回来 |
+ *
+ * 2026-11-01 那次修复把新码接进换号分支后，文案仍然走
+ * {@link codeartsQuotaExhaustedMessage}（正文逐字写「免费额度（benefit）已用尽，
+ * 预计…后重置」）—— 对积分耗尽**是错的**，违反本仓库「文案本身就是出路」红线。
+ *
+ * ## 判据
+ *
+ * 只有「积分族」的三条腿算：两个码值腿 + 中文/英文文案腿。
+ * benefit 的 `4291` 与 `insufficient quota` **刻意不算**。
+ *
+ * ⚠️ 纯文案腿**先排除 benefit 缺失报文**（`InferHub.4004.200`）：那种报文该走
+ * 「去头重试一次」，不是「换号」。若上游把 benefit 缺失也改成中文措辞
+ *（如「免费额度已用尽」），`CREDIT_EXHAUSTED_PATTERN` 会命中 —— 那时会把
+ * 一次本来能自愈的请求误判成「没钱」并轮完整池。这条豁免是审计点出来的
+ * **顺序风险**，今天不可达（benefit 报文实测只带英文/码值），但加到这里是零成本的。
+ */
+export declare function isCreditExhaustedQuota(code: string, message: string): boolean;
+/**
+ * 「**账号积分**已耗尽」的用户可见文案。
+ *
+ * 与 {@link codeartsQuotaExhaustedMessage} 的**唯一区别**：**不承诺任何重置时刻**。
+ * 积分是充值 / 活动领来的，用完不会自己回来 —— 写「预计 N 后重置」等于告诉用户
+ * 在等一个永不到来的时刻。
+ */
+export declare function codeartsCreditExhaustedMessage(model: string): string;
 /**
  * HTTP **4xx** 报文里是否表示「该账号没有 benefit（免费额度）包」。
  *

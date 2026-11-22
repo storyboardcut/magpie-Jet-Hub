@@ -133,6 +133,11 @@ export const DISPLAY_NAME = 'Jet Hub'
  */
 export const DSH_PROVIDERS = [
   'accio',
+  // 2026-11-22 自行跟进上游 1c3775b：上游 11-19 新增 AgnesCode 国内/国际两站
+  // （独立账号体系，同一套实现与图标），注册表序在 marvis 前；这里按本仓
+  // 惯例排字母序（accio < agnescode < agnescodeintl < astudio）。
+  'agnescode',
+  'agnescodeintl',
   'astudio',
   'autoclaw',
   'autoclawintl',
@@ -141,6 +146,11 @@ export const DSH_PROVIDERS = [
   'cline',
   'codearts',
   'codely',
+  // 2026-11-22 跟进上游 1c3775b：上游注册了豆包（doubao，cookie 鉴权 + CDP 页面签到），
+  // 但注册表明写 **`channel: false`（UI 先行阶段）**—— 签到/积分已接通、模型目录
+  // 完全没有（上游明说避免触发「channel ⇒ 必须有目录」守卫），vendor 的
+  // modelAdapters 表也没有 doubao。按本仓「只接真渠道」口径（与 aggregate /
+  // jet-hub-auto 不注册同理），doubao **暂不接入**；等上游 channel: true 再加。
   'gemini',
   'lobsterai',
   'loomy',
@@ -169,6 +179,9 @@ export const DSH_PROVIDERS = [
  */
 const NAMES = {
   accio: 'Accio (阿里)',
+  // 2026-11-22 自行跟进上游 1c3775b：上游 label 是「AgnesCode」，国际版括注区分。
+  agnescode: 'AgnesCode',
+  agnescodeintl: 'AgnesCode (国际版)',
   astudio: 'AStudio (讯飞)',
   autoclaw: 'AutoClaw (智谱)',
   autoclawintl: 'AutoClaw (国际版)',

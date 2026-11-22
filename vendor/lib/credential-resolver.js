@@ -159,6 +159,34 @@ import { isPolicyBlockedAccount } from './account-pool.js';
  */
 export const NO_FREE_MODEL = () => false;
 /**
+ * 「轮换起点」在**免费模型**路径上的纯旋转（不判档位）。
+ *
+ * ## 为什么需要单独一个函数
+ *
+ * 免费模型分支**刻意不查余额**（免费模型不消耗积分，余额与它无关，也省一次
+ * 网络请求）⇒ 拿不到档位 ⇒ **不能**用 `rotateFromPreferred`
+ *（那个要用 `buddyBalanceTier(..., {allowPermanent})` 判「哪些号可用」，
+ * 才能决定起点落在谁身上）。
+ *
+ * 而免费路径的候选已过 `enabled` / 封禁 / 逐模型限流，**全是可用项**
+ * ⇒ 纯旋转即是全部语义，与 `account-pool.ts` 的 `rotateFromAccountId` 同型。
+ *
+ * ## 三条不变量
+ *
+ * 1. **集合不变**：只旋转，不增删；
+ * 2. **保序**：起点前后各保持原相对顺序；
+ * 3. **找不到 / 首位 / 未设置 ⇒ 原样**（仍返回新数组，不改入参）。
+ */
+function rotateFreeCandidates(candidates, rotationStartId) {
+    const copy = [...candidates];
+    if (rotationStartId === undefined || rotationStartId.length === 0)
+        return copy;
+    const index = copy.findIndex((c) => c.id === rotationStartId);
+    if (index <= 0)
+        return copy;
+    return [...copy.slice(index), ...copy.slice(0, index)];
+}
+/**
  * 按 `enabled` + 模型限流筛出候选账号。
  *
  * ⚠️ **判据必须与 `AccountPool.getAvailableAccount` 逐字一致**（含「空 modelId
@@ -232,7 +260,28 @@ export function createCredentialResolver(deps, config) {
             //    ⚠️ **不能**改用 `getAvailableAccount`：那是池内的**裸 `JSON.parse`**，
             //    会让 TRAE / LobsterAI 的损坏凭据从「被拒」变成「被接受」。
             if (free) {
-                for (const candidate of candidates) {
+                /**
+                 * ⚠️⚠️ **「轮换起点」必须也作用于免费模型**（真实缺陷，2026-11-11 用户实测）：
+                 * 他选了「账号 2 · M移0959」，实际却仍用「账号 1 · M电4016」。
+                 *
+                 * 根因：上面的免费短路按 `candidates` 原序取第一个凭据可读的号并**直接
+                 * return**，而 `rotationStartId` 的计算在它**之后**（L544）⇒ 永远到不了。
+                 *
+                 * ## 为什么当初写「免费模型不重排」是错的
+                 *
+                 * 那个理由原文是「免费路径不看档位，只挑第一个凭据可读的号，插优先级会
+                 * 改变它的既有语义」。**它只对「档位」成立，对「起点」不成立** ——
+                 * 起点不是档位，它只是「从谁开始数」，与是否消耗积分毫无关系。
+                 *
+                 * ## ⚠️ 这里**不能**调 `rotateFromPreferred`
+                 *
+                 * 那个函数要用 `buddyBalanceTier(..., { allowPermanent })` 判「可用」
+                 * 才能决定起点落点；而**本分支刻意不查余额**（免费模型没必要，也省一次
+                 * 网络请求）⇒ 拿不到档位。故这里做**纯旋转**（不跳不可用项）：
+                 * 免费路径的候选已过 enabled / 封禁 / 限流，且免费模型不受余额限制。
+                 */
+                const freeCandidates = rotateFreeCandidates(candidates, deps.pool.preferredRotationFor?.(providerId, sessionId));
+                for (const candidate of freeCandidates) {
                     const credential = await config.readCredential(candidate.credentialRef);
                     if (credential !== undefined) {
                         if (plan.reportPickedAccount !== false)
@@ -246,6 +295,54 @@ export function createCredentialResolver(deps, config) {
             }
             // ② 余额分档编排（共享实现 `pickBuddyAccount`，**不要**在本文件再手写一份）。
             const allowPermanent = !deps.pool.permanentLocked(providerId);
+            /**
+             * 「轮换起点」：本会话指定的起始账号（用户 2026-11-10 需求）。
+             *
+             * ⚠️ 三条判据：
+             * 1. **免费模型不参与** —— 免费路径（上面 ①）压根不看档位/顺序，只挑第一个
+             *    凭据可读的号；在那里插起点会改变它的既有语义，且收益为零（不消耗积分）；
+             * 2. **与 `strictManualOrder` 无关** —— 严格模式下**同样生效**
+             *    （旋转只挪起点，不改「档位只当可用性判据」这条）；
+             * 3. **未实现 `preferredRotationFor`（单测替身）⇒ `undefined`** ⇒
+             *    行为与改动前**逐字节相同**（本功能的唯一回归面）。
+             */
+            const rotationStartId = free === true
+                ? undefined
+                : deps.pool.preferredRotationFor?.(providerId, sessionId);
+            /**
+             * 「轮换起点的定位基准」：**全量启用账号**的 id 列表（池序、不过滤封禁/限流）。
+             *
+             * ⚠️ 存在的理由（PR #59 正向审计 P1-a）：起点账号被**账号级封禁**或被
+             * **目标模型限流**时，`candidatesOf` 已把它滤掉 ⇒ 它不在 `ranked` 里 ⇒
+             * `rotateFromPreferred` 会「找不到就原样」，于是**静默回落默认第一个号**
+             * —— 恰是用户选起点想避开的那个。
+             *
+             * 拿这份**未过滤**的列表，`rotateFromPreferred` 才能算出起点的池位次，
+             * 再从候选里取「位次 ≥ 起点」的第一个（用户明确要求的「循环到下一个可用」）。
+             *
+             * ⚠️ 只在配了起点时才算：无起点时既不查池也不过滤，行为与改动前逐字节相同。
+             */
+            const enabledAccountIds = rotationStartId === undefined
+                ? undefined
+                : deps.pool
+                    .listAccountsByProvider(providerId)
+                    .filter(a => a.enabled)
+                    .map(a => a.id);
+            /**
+             * ★ **起点选定时的档位快照**（S6，2026-11-20）。
+             *
+             * `undefined` 的两种来源都回落 S5（起点绝对第一）：
+             * 1. 没配起点；
+             * 2. **老数据**（升级前选的起点，`state.json` 里没有该字段）。
+             *
+             * ⚠️ 与 `rotationStartId` **成对读取**：只传 id 不传档位 ⇒ 永远走 S5
+             * ⇒ 本功能对老数据「静默不生效」且**不会有任何报错**
+             *（用户只会觉得「我明明重选过起点，怎么还是先烧自己的短期」）。
+             * ⇒ 两者必须一起读、一起传。
+             */
+            const rotationStartTier = rotationStartId === undefined
+                ? undefined
+                : deps.pool.rotationStartTierFor?.(providerId, sessionId);
             const picked = await pickBuddyAccount(plan.selector, candidates, {
                 allowPermanent,
                 resolveCredential: config.readCredential,
@@ -253,6 +350,9 @@ export function createCredentialResolver(deps, config) {
                 // ⚠️ **每次现读**（面板可随时切换），且**未实现时视为关闭** ——
                 //    单测替身与结构化 stub 不实现它时必须走既有语义（`=== true` 判据）。
                 strictManualOrder: deps.pool.strictManualOrder?.(providerId) === true,
+                ...(rotationStartId === undefined ? {} : { rotationStartId }),
+                ...(rotationStartTier === undefined ? {} : { rotationStartTier }),
+                ...(enabledAccountIds === undefined ? {} : { enabledAccountIds }),
             });
             if (picked.kind === 'account') {
                 if (plan.reportPickedAccount !== false)
@@ -336,11 +436,21 @@ export function createCredentialResolver(deps, config) {
         const poolSwitch = typeof deps.pool.sessionBalanceEnabled === 'function'
             ? deps.pool.sessionBalanceEnabled()
             : sessionBalanceEnabled();
+        /**
+         * 「轮换起点」（池选号路径：codearts / cline / gemini / opencode …）。
+         *
+         * ⚠️ **`session-balance`（zcode 会话亲和）刻意不参与**：那套用 rendezvous 哈希
+         * 把会话稳定映射到账号，优先级由哈希决定；插一个起点会与哈希结果互相干扰。
+         * ⚠️ 该路径**没有余额档位**（候选已过 enabled/封禁/限流）⇒ 纯旋转即可。
+         */
+        const poolRotationStart = config.accountSelection === 'session-balance'
+            ? undefined
+            : deps.pool.preferredRotationFor?.(providerId, sessionId);
         const available = config.accountSelection === 'session-balance'
             && poolSwitch
             && deps.pool.getAvailableAccountForSession !== undefined
             ? await deps.pool.getAvailableAccountForSession(providerId, modelId ?? '', sessionId, tried)
-            : await deps.pool.getAvailableAccount(providerId, modelId ?? '', tried);
+            : await deps.pool.getAvailableAccount(providerId, modelId ?? '', tried, poolRotationStart);
         // ④ 回报「池的决策结果」——**未命中时也报 `undefined`**（见 `reportAccount` 契约）。
         report(available?.entry.id ?? undefined);
         /**

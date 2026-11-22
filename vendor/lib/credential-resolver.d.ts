@@ -116,6 +116,7 @@
  *    给它接判定反而会改变既有行为（`ratelimit-misreport-behavior.spec.ts`
  *    有专门一条锁死这个现状）。
  */
+import type { RotationStartTier } from './jet-hub-store.js';
 import type { BuddyNoAccountReason, BuddySelectorLike } from './buddy-balance-selector.js';
 import type { LoomyCandidateAccount, LoomyNoAccountReason, LoomySelectionResult } from './loomy-balance-selector.js';
 import type { LoomyTierOptions } from './loomy-balance-rank.js';
@@ -156,7 +157,14 @@ export interface ResolverPool<TCredential = unknown> {
     /** 该 provider 是否处于「锁定永久积分」状态。 */
     permanentLocked(provider: string): boolean;
     /** 取「当前最该用的一个账号」；`null` = 没有可用账号。 */
-    getAvailableAccount(provider: string, modelId: string, excludeAccountIds?: ReadonlySet<string>): Promise<{
+    getAvailableAccount(provider: string, modelId: string, excludeAccountIds?: ReadonlySet<string>, 
+    /**
+     * 「轮换起点」：本会话指定的起始账号 id（可选）。
+     *
+     * ⚠️ 池实现**只做旋转**（从它起绕一圈），不增删候选 ⇒ 它不可用时仍会选中别的号。
+     * ⚠️ 未传 / 未实现时行为与改动前**逐字节相同**。
+     */
+    rotationStartId?: string): Promise<{
         entry: {
             id: string;
             credentialRef: string;
@@ -193,6 +201,27 @@ export interface ResolverPool<TCredential = unknown> {
      * 与单测 stub 不该因为「这个可选方法不存在」而被动获得新行为。
      */
     strictManualOrder?(provider: string): boolean;
+    /**
+     * 「轮换起点」（可选能力；真实 `AccountPool` 已实现）。
+     *
+     * 返回**本会话**指定的起始账号 id；`undefined` = 默认起点。
+     *
+     * ⚠️ **未实现时行为必须与改动前逐字节一致**（本功能的唯一回归面：
+     * 大量单测用结构化替身池，它们不认识本方法）。
+     */
+    preferredRotationFor?(provider: string, sessionId: string | undefined): string | undefined;
+    /**
+     * ★ **起点选定那一刻的档位**（S6 可选能力；真实 `AccountPool` 已实现）。
+     *
+     * 用于判断「起点那一档是否已烧完」：不同则交出首位（见 `rotateFromPreferred`）。
+     *
+     * ⚠️ **未实现 / 返回 `undefined` ⇒ 回落 S5**（起点绝对第一）。
+     * 这正是老数据与单测替身的行为，与改动前逐字节一致。
+     *
+     * ⚠️ 必须与 {@link preferredRotationFor} **成对**实现：只实现前者会让
+     * S6 对老数据「静默不生效」且零报错（用户只会觉得「重选了起点还是先烧自己的」）。
+     */
+    rotationStartTierFor?(provider: string, sessionId: string | undefined): RotationStartTier | undefined;
 }
 /** 注入的共享设施。 */
 export interface CredentialResolverDeps<TCredential = unknown> {
