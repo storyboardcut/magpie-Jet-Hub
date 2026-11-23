@@ -167,6 +167,40 @@ export class JetHubContainer {
   }
 
   /**
+   * 某家 provider 的**当前账号凭据原文**（给 MiniMax 多媒体工具用）。
+   *
+   * 与 `credentialAlive()` 同源（同一个文件、同一个解析器），但返回值而不是布尔。
+   * 顺序：取账号池里该 provider 第一个 `enabled !== false` 的账号，读它的
+   * `credentialRef` 对应的凭据。
+   *
+   * ⚠️ 纯读，不刷新令牌。理由见 `src/minimax-tools.mjs` 文件头：refresh_token
+   * 一次性，与 DSH 抢刷新会把账号登出。
+   *
+   * @param {string} provider 本体 provider id（`minimax` / `minimaxintl`）
+   * @returns {string | undefined} 凭据原文（JSON 字符串），取不到时 undefined
+   */
+  credentialTextOf(provider) {
+    let accounts
+    try {
+      // 容器还没起来时 `seam` / `pool` 不存在 —— 工具侧拿到 undefined 会报可读错误。
+      accounts = this.seam?.pool?.readAccounts?.() ?? []
+    } catch {
+      return undefined
+    }
+    const hit = accounts.find((a) => a?.provider === provider && a?.enabled !== false)
+    if (hit === undefined) return undefined
+    let text
+    try {
+      text = readFileSync(this.credentialFile(), 'utf8')
+    } catch {
+      return undefined
+    }
+    const refs = parseRefs(text)
+    const raw = refs.get(hit.credentialRef)
+    return raw === undefined || raw === '' ? undefined : raw
+  }
+
+  /**
    * 这个账号的凭据还在不在。
    *
    * 2026-11-01 真机报障：magpie 里点「连接」挑了一个 9 月建的旧账号，magpie 显示

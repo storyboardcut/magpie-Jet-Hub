@@ -41,6 +41,10 @@
 
 import { JetHubContainer } from './container.mjs'
 import { parseRefs } from './credentials.mjs'
+// MiniMax 多媒体工具（图像/视频/语音/音乐/多模态）：用本插件已有账号的令牌。
+// 工具实现原样来自 minimax/（上游 @magpie-community/opencode-minimax-auth，MIT），
+// 只把「令牌从哪来」换成本插件的容器 —— 见 src/minimax-tools.mjs 文件头。
+import { minimaxTools, isMinimaxProvider, accessFromCredential } from './minimax-tools.mjs'
 // 上游的**积分/签到能力表** —— 由它直接回答「这家有没有签到」，
 // 而不是在插件里再抄一份名单（抄了必然漂移）。
 import { createProviderCredits, creditsOf } from '../vendor/lib/provider-credits.js'
@@ -2794,7 +2798,40 @@ export function makePlugin(dshProvider) {
       return picked?.models ?? provider?.models ?? fallbackFor(dshProvider)
     }
 
+    /**
+     * MiniMax 多媒体工具（图像 / 视频 / 语音 / 音乐 / 多模态理解）。
+     *
+     * 只有 `minimax` / `minimaxintl` 两家挂载 —— 工具本身就是这两站账号的能力。
+     * 令牌从**本插件自己的容器**里读（DSH 的 .credentials.yaml），所以用的就是
+     * 用户在 magpie 里已经「连接」好的那个账号，不需要再登录一次。
+     *
+     * ⚠️ 纯读不刷：refresh_token 一次性，与 DSH 抢刷新会把账号登出
+     *    （见 src/minimax-tools.mjs 文件头）。
+     */
+    const toolsOf = isMinimaxProvider(dshProvider)
+      ? minimaxTools(async (provider) => {
+        let raw
+        try {
+          raw = container.credentialTextOf(provider)
+        } catch (e) {
+          return { error: `读取 ${provider} 账号凭据失败：${e?.message ?? e}` }
+        }
+        if (raw === undefined) {
+          return {
+            error: `${NAMES[provider] ?? provider} 还没有可用账号 —— 先在 magpie 的 Providers 页把这家「连接」上，`
+              + '或到 DSH 的 Jet Hub 里登录该账号。',
+          }
+        }
+        const got = accessFromCredential(raw)
+        return got.ok ? { access: got.access } : { error: got.error ?? got.reason }
+      }, { compactTools: optionOn('compact_minimax_tools', false) })
+      : undefined
+
     return {
+      // 工具集合与插件工厂返回值同层（magpie 的契约：`{ tool: {...} }`）。
+      // 非 MiniMax 的 provider 不挂（`undefined` 会被宿主忽略）。
+      ...(toolsOf === undefined ? {} : { tool: toolsOf.tool }),
+
       async config(cfg) {
         cfg.provider ??= {}
         cfg.provider[id] ??= {}
