@@ -15,6 +15,8 @@
  *           载体页见 src/zcode-carrier-page.ts 与 src/captcha-carrier-server.ts）/
  *           backup.export / backup.import / backup.status /
  *           nativeSearch.getEnabled / nativeSearch.setEnabled /
+ *           loginPreferences.getEnabled / loginPreferences.setEnabled（新建账号
+ *           时是否自动打开浏览器授权页；关闭后改为复制链接）/
  *           sessionBalance.getEnabled / sessionBalance.setEnabled /
  *           panelEntry.get / panelEntry.set /
  *           resume.getState / resume.setArmed / resume.setEnabled /

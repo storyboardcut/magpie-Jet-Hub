@@ -658,4 +658,30 @@ export declare function registerBuddyLlm(ctx: Context, options: BuddyAdapterOpti
  * @throws {WebNativeError} 无可用账号 / 上游非 2xx / 响应无法解析 / 超时。
  */
 export declare function performBuddySearch(query: string, credential: unknown, signal: AbortSignal, product: BuddyProduct): Promise<NativeSource[]>;
+/**
+ * ★★★ **腾讯系 `parameters` 的递归 sanitize**（issue #138，2026-11-23）。
+ *
+ * ## 为什么需要它
+ *
+ * `copilot.tencent.com` / `www.workbuddy.ai` 对工具 `parameters` 做**严格 JSON Schema
+ * 校验**：工具表里**任意一个**工具不合规，**整个请求**就 400 `11129`，
+ * 而且响应里**不带工具名** ⇒ 只能靠二分法排查（成本极高）。
+ * 更糟的是校验严格度**随模型变化**（`hy4flash-free` 不校验、`deepseek-v4.1-flash` 严格）
+ * ⇒ 用户会得到「换个模型就好」的假象。
+ *
+ * ## 修的四类（都是真机实测过的形态）
+ *
+ * 1. **根级 / 嵌套 `{type:'object'}` 缺 `properties`** → 补 `{}`；
+ * 2. **裸对象**（无 `type` 也无组合键）→ 补 `type:'object', properties:{}`；
+ * 3. **根级 `$schema` / `$id`** → 剥掉（只是 draft 声明，无语义损失）；
+ * 4. **`pattern` 含 `\0`** → 改写成 `\^@`（语义不变，腾讯接受）。
+ *
+ * ## 判据要点
+ *
+ * - **只加不改**：能补的补（`properties` / `items`），**不删**有语义的字段；
+ * - **不碰无关字段**（`description` / `enum` / `$ref` / `const` / `prefixItems` 一律原样）；
+ * - **结构共享友好**：没变就返回**原对象**（`===` 可判），避免整棵 schema 深拷贝；
+ * - `\0` 判断用**字符串里真有那两个字符**（反斜杠 + `0`），不是 `\u0000`。
+ */
+export declare function sanitizeToolSchema<T>(node: T, isRoot?: boolean): T;
 //# sourceMappingURL=buddy-adapter.d.ts.map

@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { getRandomValues, randomUUID, randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { autoOpenBrowserEnabled } from './login-preferences.js';
 import { CLIENT_ID, REDIRECT_PATH, credentialFromTokenResponse, exchangeAuthorizationCode, generateDpopKeyPair, generatePkcePair, } from './oauth.js';
 export const CODEARTS_LOGIN_BASE = 'https://devcloud.cn-north-4.huaweicloud.com/doer/redirect';
 export const HUAWEI_AUTH_BASE = 'https://auth.huaweicloud.com/authui/login.html';
@@ -121,6 +122,13 @@ export async function pollForCredential(ticketId, secret, options = {}) {
  * 不因它挂起，后者补上缺失的监听器，二者缺一不可。
  */
 export function openBrowser(url) {
+    // ★ 「新建账号时自动打开浏览器授权页」开关（2026-11-23，默认开）。
+    //   关闭后**不 spawn**，但把地址写进日志 —— 阻塞式入口（`runOAuthFlow` 等）
+    //   没有可展示链接的面板，这条日志是用户唯一能拿到的地址。
+    if (!autoOpenBrowserEnabled()) {
+        console.info('[codearts-auth] 已关闭「自动打开浏览器」，请手动打开登录地址:', url);
+        return;
+    }
     const warn = (error) => {
         console.error('[codearts-auth] failed to open browser; open manually:', url, error);
     };
@@ -352,6 +360,14 @@ export function openIncognitoWindow(url) {
     // 下一个用例换个 URL 就会复发。必须按**运行环境**一刀切断。
     if (process.env.NODE_ENV === 'test')
         return false;
+    // ★ 「新建账号时自动打开浏览器授权页」开关（2026-11-23，默认开）。
+    //   关闭后**不 spawn 无痕窗**，返回 `false` —— 与「读不到默认浏览器 / spawn
+    //   失败」走**同一条回退语义**（调用方本来就要处理 false）。
+    //   ⚠️ 必须在测试断路器**之后**判：单测里无论如何都不该走到这里。
+    if (!autoOpenBrowserEnabled()) {
+        console.info('[codearts-auth] 已关闭「自动打开浏览器」，未拉起无痕窗口；登录地址:', url);
+        return false;
+    }
     const exe = defaultBrowserExecutable();
     if (exe === undefined)
         return false;

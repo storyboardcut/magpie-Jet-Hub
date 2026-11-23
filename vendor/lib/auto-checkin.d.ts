@@ -98,6 +98,25 @@ export interface AutoCheckinDoc {
      */
     zcodeEnabled?: true;
     /**
+     * 豆包参加自动签到的**逐渠道开关**（2026-11-22 用户需求：「面板里面加个豆包
+     * 自动签到的开关」）。**三态**，与上面两格都不同：
+     *
+     * - 缺席 = **跟随 registry**（`autoCheckinExcluded` 说了算）；
+     * - `true` = 用户明确要它进自动链（即使 registry 把它登记成「有代价」）；
+     * - `false` = 用户明确不要它进（即使 registry 默认把它算进来）。
+     *
+     * ## 为什么不照抄 `zcodeEnabled` 的「只写 true、关时删键」
+     *
+     * zcode 那格是 **opt-in**（默认关，只有用户点头才开），因为它的代价是
+     * **设备级** captcha 配额；而豆包的代价只是「每账号每天起一次 headless
+     * Chromium」，默认口径**由 registry 决定**。两格默认方向不同，落盘语义也就不能
+     * 照抄：这里缺席**不是**「关」，而是「没表态」。
+     *
+     * ⚠️ 因此**两个值都要落盘**（`true` / `false`）：删键会让「没表态」与「用户
+     * 特意关掉」在磁盘上同形，面板下次打开就分不出这个开关到底该显示成谁的意思。
+     */
+    doubaoEnabled?: boolean;
+    /**
      * 每天**两个**执行时刻（`HH:MM`，UTC+8，升序、去重、恰好两个）。
      *
      * 用户 2026-10-18 要求：「每天几点自动启动…一天两次实现无遗漏」—— 原先的
@@ -485,6 +504,15 @@ export declare function isAutoCheckinExcluded(provider: string): boolean;
  *    并在 `AutoCheckinDoc` 上补对应的 opt-in 字段。
  */
 export declare function isAutoCheckinOptedIn(provider: string, doc: Pick<AutoCheckinDoc, 'zcodeEnabled'>): boolean;
+/**
+ * 豆包这一轮该不该参加自动签到（三态，见 `AutoCheckinDoc.doubaoEnabled`）。
+ *
+ * ⚠️ 缺席 ⇒ 跟随 registry；`true` / `false` ⇒ 用户的明确表态说了算。
+ * ⚠️ 本函数**只认豆包**，但把 `provider === 'doubao'` 的守卫留在调用方
+ *    （`performRun` 的豆包分支）—— 免得将来有人拿它当「任意渠道的通用判据」，
+ *    那会跳过 modelscope / zcode 各自的专用格。
+ */
+export declare function doubaoCheckinEnabled(doc: Pick<AutoCheckinDoc, 'doubaoEnabled'>): boolean;
 /** 把一轮结果拼成一句中文摘要（给状态灯提示与日志用）。 */
 export declare function describeRun(totals: RunTotals): string;
 /**
@@ -595,6 +623,18 @@ export interface AutoCheckin {
      * 用户点完立刻弹一个 Chromium 窗口比「下个时段再生效」更让人意外。
      */
     setZcodeEnabled(enabled: boolean): Promise<void>;
+    /**
+     * 豆包这一轮是否参加自动签到（**三态**，语义见 {@link AutoCheckinDoc.doubaoEnabled}）：
+     * 用户表态优先，缺失则跟随 registry。
+     */
+    doubaoEnabled(): boolean;
+    /**
+     * 写豆包的逐渠道开关（面板上那个「豆包自动签到」）。
+     *
+     * ⚠️ 与 `setZcodeEnabled` 一致：**不立刻跑一轮**（改的是「下一轮参不参加」，
+     * 不是「现在就跑」；想立刻领请点面板的「一键领取积分」）。
+     */
+    setDoubaoEnabled(enabled: boolean): Promise<void>;
     /** 写开关；**打开时若有时段没跑，立刻跑一轮**（否则用户会以为开关没生效）。 */
     setEnabled(enabled: boolean): Promise<RpcUsageAutoCheckinState>;
     /**

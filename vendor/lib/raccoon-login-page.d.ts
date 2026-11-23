@@ -75,6 +75,16 @@ export interface RaccoonLoginFlowOptions {
      * （本仓在 officeace 那次已登记过同一条纪律：开窗的行为测试只能放 e2e。）
      */
     openAuthorizePage?: (url: string) => void;
+    /**
+     * 「自动打开浏览器」闸门（2026-11-23）。
+     *
+     * 返回 `false` ⇒ 宿主**不**打开 `/authorize` 页，改为把链接交给本地页展示
+     * + 复制（与「新建账号时自动打开浏览器授权页」开关同源）。
+     *
+     * ⚠️ 注入点：单测传 `() => false` 就不必真开窗（本仓纪律：开窗的行为测试
+     * 只能放 e2e）。缺省读宿主偏好（`login-preferences.ts`）。
+     */
+    autoOpenBrowser?: () => boolean;
 }
 /**
  * 启动登录流程。
