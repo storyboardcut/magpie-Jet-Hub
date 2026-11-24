@@ -81,20 +81,11 @@ for (const [name, fn] of fns) {
       // 上下文别再是「一个数字都没有」：真实窗口必须来自本体，不能全 0。
       // ⚠️ 逐家不判死：codely 上游只声明模态、不声明 context（实测），那家全 0
       // 是上游事实。所以只把「一家都没有」当失败 —— 那才是能力链路整体断了。
-      //
-      // ⚠️ **媒体模型豁免**（2026-11-24）：MiniMax 的图像 / 视频模型
-      // （MiniMax-Image / H3 / H3-Max / Hailuo-2.3）是「把生成能力伪装成模型」，
-      // 它们**不参与对话**，limit.context 就该是 0（上游 mediaConfigModels 同款）。
-      // 判据取结构而不是 id 白名单：capabilities.output.text === false 且
-      // image/video 为 true —— 将来别家接媒体模型也自动适用。
-      const isMediaModel = (m) => m?.capabilities?.output?.text === false
-        && (m.capabilities.output.image === true || m.capabilities.output.video === true)
-      const dialogRows = rows.filter((m) => !isMediaModel(m))
-      const withContext = dialogRows.filter((m) => (m?.limit?.context ?? 0) > 0).length
+      const withContext = rows.filter((m) => (m?.limit?.context ?? 0) > 0).length
       // 隔离环境里 29 家的种子都写了 meta.context，所以只要有一家的模型没带上
       // limit.context 就是 absorbMeta → modelEntry 这条链路断了。别退化成「全部缺
       // 才算红」—— 只坏一家（往往正是用户最常用那家）时那条判据不成立，等于假绿。
-      if (dialogRows.length > 0 && withContext !== dialogRows.length) noContext.push(name)
+      if (rows.length > 0 && withContext !== rows.length) noContext.push(name)
       for (const [mid, m] of Object.entries(models)) outputById.set(`${name}/${mid}`, m?.limit?.output)
     }
   }
