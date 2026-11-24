@@ -137,8 +137,14 @@ export function toMagpieMediaModels(models) {
   const out = {}
   for (const [id, m] of Object.entries(models)) {
     const isImage = Array.isArray(m?.modalities?.output) && m.modalities.output.includes('image')
+    // ⚠️ 先解构掉 `cost`（上游给了全 0 的 `emptyCost`）。**不发 cost 字段**
+    // （2026-11-24 t-model-prices 抓到的）：magpie 的判据是
+    // `Cost == nil || (Input <= 0 && Output <= 0)`，发一个全 0 的对象等于
+    // 「确认免费」，会把「不知道」说成 0。图像/视频按次计费、不是按 token，
+    // 本来就没有 token 单价 —— 不发，让它落回 magpie 自己的兜底链。
+    const { cost: _droppedCost, ...rest } = m ?? {}
     out[id] = {
-      ...m,
+      ...rest,
       // 媒体模型没有对话上下文（不是在聊天里用的），给 0 而不是缺字段。
       limit: { context: 0, output: 0 },
       capabilities: {

@@ -3605,7 +3605,12 @@ export function makePlugin(dshProvider) {
       provider: {
         id,
         async models(provider) {
-          return currentModels(provider)
+          const chat = currentModels(provider)
+          // ⚠️ 媒体模型必须在这里也合并一次：magpie 运行时优先用 `provider.models()`
+          // 的返回（整体替换 config 里那份），只在 config 里加的话界面上看不到
+          // 「MiniMax-Image / H3 / H3-Max / Hailuo-2.3」（2026-11-24 实测症状：
+          // config 里 6 个、界面只显示 2 个）。
+          return mediaOf === undefined ? chat : { ...chat, ...mediaOf.models }
         },
       },
 
