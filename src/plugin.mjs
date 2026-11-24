@@ -44,7 +44,8 @@ import { parseRefs } from './credentials.mjs'
 // MiniMax 多媒体工具（图像/视频/语音/音乐/多模态）：用本插件已有账号的令牌。
 // 工具实现原样来自 minimax/（上游 @magpie-community/opencode-minimax-auth，MIT），
 // 只把「令牌从哪来」换成本插件的容器 —— 见 src/minimax-tools.mjs 文件头。
-import { minimaxTools, isMinimaxProvider, accessFromCredential } from './minimax-tools.mjs'
+import { minimaxTools, isMinimaxProvider, accessFromCredential, makeMediaTransport, toMagpieMediaModels, SITE_OF_PROVIDER, SITES } from './minimax-tools.mjs'
+import { mediaConfigModels, handleMediaFetch, createSearchHook } from '../minimax/native.mjs'
 // 上游的**积分/签到能力表** —— 由它直接回答「这家有没有签到」，
 // 而不是在插件里再抄一份名单（抄了必然漂移）。
 import { createProviderCredits, creditsOf } from '../vendor/lib/provider-credits.js'
@@ -2808,29 +2809,64 @@ export function makePlugin(dshProvider) {
      * ⚠️ 纯读不刷：refresh_token 一次性，与 DSH 抢刷新会把账号登出
      *    （见 src/minimax-tools.mjs 文件头）。
      */
+    /**
+     * 取本家账号的 access_token（MiniMax 工具与媒体模型共用）。
+     *
+     * @returns {Promise<{access: string} | {error: string}>}
+     */
+    const minimaxAccess = async (provider) => {
+      let raw
+      try {
+        raw = container.credentialTextOf(provider)
+      } catch (e) {
+        return { error: `读取 ${provider} 账号凭据失败：${e?.message ?? e}` }
+      }
+      if (raw === undefined) {
+        return {
+          error: `${NAMES[provider] ?? provider} 还没有可用账号 —— 先在 magpie 的 Providers 页把这家「连接」上，`
+            + '或到 DSH 的 Jet Hub 里登录该账号。',
+        }
+      }
+      const got = accessFromCredential(raw)
+      return got.ok ? { access: got.access } : { error: got.error ?? got.reason }
+    }
+
     const toolsOf = isMinimaxProvider(dshProvider)
-      ? minimaxTools(async (provider) => {
-        let raw
-        try {
-          raw = container.credentialTextOf(provider)
-        } catch (e) {
-          return { error: `读取 ${provider} 账号凭据失败：${e?.message ?? e}` }
+      ? minimaxTools(minimaxAccess, { compactTools: optionOn('compact_minimax_tools', false) })
+      : undefined
+
+    /**
+     * 图像 / 视频模型 + Web 搜索钩子（对应上游 `native.mjs` 那套）。
+     *
+     * 上游把做图、做视频「伪装成模型」暴露出去，magpie 才能在
+     * Settings → Images / Video 里列出它们、并把 `plugin://<id>/v1/images/generations`
+     * 这类请求转进来。这里用同一套实现，只是传输函数的令牌来源换成本插件的容器。
+     */
+    const mediaOf = isMinimaxProvider(dshProvider)
+      ? (() => {
+        const siteId = SITE_OF_PROVIDER[dshProvider]
+        // 媒体请求也要一个传输函数；与工具共用同一套「现读容器」的取令牌逻辑。
+        const transport = makeMediaTransport(async () => {
+          const got = await minimaxAccess(dshProvider)
+          if (got.error !== undefined) throw new Error(got.error)
+          return got.access
+        })
+        return {
+          models: toMagpieMediaModels(mediaConfigModels()),
+          fetch: (url, init) => handleMediaFetch(url, init ?? {}, { request: transport, siteId }),
+          // 上游签名是 `createSearchHook(site, post)`，`site` 收的是站点对象。
+          search: createSearchHook(SITES[siteId], transport),
         }
-        if (raw === undefined) {
-          return {
-            error: `${NAMES[provider] ?? provider} 还没有可用账号 —— 先在 magpie 的 Providers 页把这家「连接」上，`
-              + '或到 DSH 的 Jet Hub 里登录该账号。',
-          }
-        }
-        const got = accessFromCredential(raw)
-        return got.ok ? { access: got.access } : { error: got.error ?? got.reason }
-      }, { compactTools: optionOn('compact_minimax_tools', false) })
+      })()
       : undefined
 
     return {
       // 工具集合与插件工厂返回值同层（magpie 的契约：`{ tool: {...} }`）。
       // 非 MiniMax 的 provider 不挂（`undefined` 会被宿主忽略）。
       ...(toolsOf === undefined ? {} : { tool: toolsOf.tool }),
+      // Web 搜索钩子：magpie 在 Settings → Web search 里列出它（与 Tavily 并列），
+      // 选中后由它代理搜索请求 —— 只有 MiniMax 两家挂。
+      ...(mediaOf === undefined ? {} : { search: mediaOf.search }),
 
       async config(cfg) {
         cfg.provider ??= {}
@@ -2846,6 +2882,10 @@ export function makePlugin(dshProvider) {
         // ⚠️ 别只写 fallbackFor：那样 magpie 的供应商详情页永远只显示 1 个模型，
         //    用户要的上游全量（cline 540 / workbuddy 32）看不到。
         p.models = currentModels(p)
+        // MiniMax 两家额外挂「图像 / 视频」虚拟模型（MiniMax Image、H3、H3-Max、
+        // Hailuo-2.3）—— magpie 据此在 Settings → Images / Video 里列出它们，
+        // 并把画图/做视频的请求转进 `mediaOf.fetch`。
+        if (mediaOf !== undefined) p.models = { ...p.models, ...mediaOf.models }
       },
 
       auth: {
@@ -3383,6 +3423,17 @@ export function makePlugin(dshProvider) {
             baseURL: PLACEHOLDER_BASE,
             async fetch(fetchInput, init = {}) {
               const url = typeof fetchInput === 'string' ? fetchInput : fetchInput?.url ?? ''
+              // ⚠️ 图像 / 视频请求先走媒体层：magpie 把画图做视频发到
+              //    `plugin://<id>/v1/images/generations` 这类地址，不走 chat。
+              //    命中就返回，不命中的（返回 null）继续往下走 chat 逻辑。
+              if (mediaOf !== undefined) {
+                try {
+                  const res = await mediaOf.fetch(url, init)
+                  if (res !== null && res !== undefined) return res
+                } catch (e) {
+                  log(`MiniMax 媒体请求失败：${e?.message ?? e}`)
+                }
+              }
               const method = String(init?.method ?? 'POST').toUpperCase()
               const isChat = method === 'POST' && /\/chat\/completions(\?|$)/.test(url)
               const parsed = isChat ? parseJsonBody(init?.body) : undefined
