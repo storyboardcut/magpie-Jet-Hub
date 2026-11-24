@@ -123,6 +123,64 @@ export interface CreditWindowSetting {
     windowDays?: number;
     /** 「临期窗口」（< 此值算临期）。`undefined` = 回落下一级。 */
     imminentDays?: number;
+    /** 子代理专属设置。`undefined` = 全部跟随主代理（与加这个功能之前**逐字节相同**）。 */
+    subagent?: SubagentRotationSetting;
+}
+/**
+ * ★★★ **子代理起点策略**（2026-11-23）。
+ *
+ * | 值 | 语义 |
+ * |---|---|
+ * | `'follow'` | 与主代理用同一账号（**默认**，= 加本功能之前的行为）|
+ * | `'sequence'` | 在主代理起点**所在档位内**往后错开 |
+ * | `'reverse'` | 在同一档位内往前错开 |
+ * | `'hash'` | 按子代理 sessionId 稳定哈希到同档位内某账号（排除主代理）|
+ * | `'fixed'` | 恒定用 `fixedPosition` 那个账号（**绝对第一**，无视档位）|
+ *
+ * ⚠️⚠️ **前四种都只在「同一档位内」错开**：用户明确要求子代理也必须
+ * 遵守「临期 → 短期 → 永久」这条核心策略（2026-11-23 纠正过我第一版
+ * 把「倒序」理解成跨档位反转的错误）。
+ */
+export declare const SUBAGENT_START_MODES: readonly ["follow", "sequence", "reverse", "hash", "fixed"];
+/** 子代理起点策略（见 {@link SUBAGENT_START_MODES}）。 */
+export type SubagentStartMode = typeof SUBAGENT_START_MODES[number];
+/** 判据 {@link SubagentStartMode}（唯一真源，UI 与端点共用）。 */
+export declare function isSubagentStartMode(value: unknown): value is SubagentStartMode;
+/**
+ * ★★★ **子代理专属设置**（2026-11-23）。
+ *
+ * ## 为什么挂在 {@link CreditWindowSetting} 里
+ *
+ * 用户的原话是「在档次窗口中增加设置」。它俩都回答同一个问题 ——
+ * 「这一档积分该给谁用」，只是主代理与子代理分开回答。
+ *
+ * ⚠️ **刻意不另开一张顶层表**：那会让 `sanitizeCreditWindows` 的「整条丢弃」
+ * 规则（两字段都空则删键）与子代理设置打架 —— 一个 provider 只配了子代理、
+ * 没配窗口天数时，条目会被整条丢掉。
+ */
+export interface SubagentRotationSetting {
+    /** 起点策略。 */
+    startMode?: SubagentStartMode;
+    /**
+     * `startMode === 'fixed'` 时使用的账号位次（1-based，与
+     * `PreferredRotationEntry.position` 同口径）。
+     *
+     * ⚠️ 语义是**绝对第一**（无视档位）：该号还有任何可用积分就一直用它。
+     * 「不可用」的判据与主代理一致 ——
+     * `buddyTierUsable(buddyBalanceTier(a, { allowPermanent }))`：即
+     * 「锁定永久时只剩永久积分」算不可用，**未锁定时只剩永久积分仍可用**。
+     */
+    fixedPosition?: number;
+    /**
+     * 子代理使用的模型 id（**本 provider 内**）。
+     *
+     * ⚠️ 只接受该渠道**已启用**的模型（用户 2026-11-23 要求）。
+     * 为什么必须同 provider：`agent.model.select()` 换 provider 会让
+     * `resolveCredential` 的 provider 假设失效（选号 / 计费 / 目录全部错位）。
+     */
+    model?: string;
+    /** 子代理的思考强度 id（模型声明的 `efforts` 之一）。`undefined` = 渠道默认最高档。 */
+    reasoningEffort?: string;
 }
 /**
  * per-provider 的分档窗口覆盖表：provider id → {@link CreditWindowSetting}。
@@ -441,6 +499,17 @@ export interface JetHubState {
      */
     creditWindows?: CreditWindowMap;
     /**
+     * ★ 子代理分配表：provider → sessionId → 分配记录（2026-11-23）。
+     *
+     * ⚠️ **必须持久化**：插件重启后收不到已发过的 `subagent/start` 事件，
+     * 若不落盘，正在跑的子代理会退化成「用主代理起点」——
+     * 用户会看到「子代理突然开始烧主代理的号」。
+     *
+     * ⚠️ 与 `preferredRotation` 分开存：那张表是**用户显式选择**
+     *（会话级、可长期保留），这张是**运行时分配**（子代理级、高频、有淘汰上限）。
+     */
+    subagentAssignments?: Record<string, Record<string, unknown>>;
+    /**
      * 「面板入口」：Jet Hub 的**唯一**入口位置（{@link PanelEntry}）。
      *
      * 两个取值**严格互斥**，任一时刻只有一个入口存在：
@@ -608,6 +677,7 @@ export declare const jetHubSchema: Schema<Schemastery.ObjectS<NoInfer<{
     strictManualOrder: Schema<import("@deepseek-ai/cosmokit").Dict<any, string>, import("@deepseek-ai/cosmokit").Dict<any, string>, "defined">;
     creditWindows: Schema<import("@deepseek-ai/cosmokit").Dict<any, string>, import("@deepseek-ai/cosmokit").Dict<any, string>, "defined">;
     preferredRotation: Schema<import("@deepseek-ai/cosmokit").Dict<any, string>, import("@deepseek-ai/cosmokit").Dict<any, string>, "defined">;
+    subagentAssignments: Schema<import("@deepseek-ai/cosmokit").Dict<any, string>, import("@deepseek-ai/cosmokit").Dict<any, string>, "defined">;
     panelEntry: Schema<string, string, "plain">;
     providerOrder: Schema<string[], string[], "defined">;
     minimaxXff: Schema<string, string, "defined">;
@@ -624,6 +694,7 @@ export declare const jetHubSchema: Schema<Schemastery.ObjectS<NoInfer<{
     strictManualOrder: Schema<import("@deepseek-ai/cosmokit").Dict<any, string>, import("@deepseek-ai/cosmokit").Dict<any, string>, "defined">;
     creditWindows: Schema<import("@deepseek-ai/cosmokit").Dict<any, string>, import("@deepseek-ai/cosmokit").Dict<any, string>, "defined">;
     preferredRotation: Schema<import("@deepseek-ai/cosmokit").Dict<any, string>, import("@deepseek-ai/cosmokit").Dict<any, string>, "defined">;
+    subagentAssignments: Schema<import("@deepseek-ai/cosmokit").Dict<any, string>, import("@deepseek-ai/cosmokit").Dict<any, string>, "defined">;
     panelEntry: Schema<string, string, "plain">;
     providerOrder: Schema<string[], string[], "defined">;
     minimaxXff: Schema<string, string, "defined">;
@@ -690,38 +761,19 @@ export declare function sanitizeSessionBalanceEnabled(raw: unknown): boolean;
  *（含数组 —— `typeof [] === 'object'`）一律退化为空表 = 升级前行为。
  */
 export declare function sanitizeStrictManualOrder(raw: unknown): StrictManualOrderMap;
-/**
- * 归一化 per-provider 的分档窗口覆盖表（{@link JetHubState.creditWindows}）。
- *
- * ## 判据（逐条都是「宁可回落默认，也不接受脏值」）
- *
- * | 输入 | 结果 |
- * |---|---|
- * | 非对象 / `null` / 数组 | **空表**（= 全部回落环境变量/默认）|
- * | provider id 为空串 | 丢弃该条 |
- * | 条目不是对象 / 是数组 | 丢弃该条 |
- * | 字段不是**有限非负数字** | 丢弃该字段（回落下一级）|
- * | 两个字段都无效 | **丢弃整个条目**（不留空对象噪音键）|
- * | 合法值（含 `0`）| 保留 |
- *
- * ⚠️⚠️ **`0` 必须保留**：它是「关掉该档」的合法值（`DSH_BUDDY_IMMINENT_WINDOW_DAYS=0`
- * 就是关掉临期档）。用 `if (value)` 判会把 `0` 当假值丢掉 ——
- * 后果是用户设了 0 却静默变回默认 5 天，且**没有任何提示**。
- *
- * ⚠️ **不接受数字字符串**（`'7'`）：`state.json` 是可被用户手改的文件，
- * 而 `'7'` 这类脏值若被接受，写入侧（写 number）与读取侧（可能写 string）
- * 会形成两种类型，后续 `days * DAY_MS` 在字符串上会得到 `NaN` 或字符串拼接。
- * ⇒ 一律要求 `typeof === 'number'`。
- *
- * ⚠️ 不接受 `Infinity` / `NaN`（`Number.isFinite` 挡住）：
- * `Infinity` 会让「永久」档永远为空（一切都被判成临期/短期），
- * 而 `NaN` 会让分桶全落 `unknownExpiry`。两者都是静默的错误形态。
- *
- * ⚠️ 上下界不在这里钳制（`windowDays` 的上限、`imminentDays <= windowDays` 的
- * 嵌套约束）—— 那些是**业务语义**，归 `resolveCreditWindow`
- * （全仓唯一钳制点）。本函数只管「形状与类型是否可信」。
- */
 export declare function sanitizeCreditWindows(raw: unknown): CreditWindowMap;
+/**
+ * 归一化 {@link SubagentRotationSetting}。
+ *
+ * ## 纪律：宁丢弃，不猜
+ *
+ * 与 {@link sanitizePreferredRotation} 同一取向 —— 脏数据一律**丢字段**而不是
+ * 回落到某个看起来合理的猜测。理由：这些值直接决定「烧哪个号的积分」，
+ * 猜错会**静默消耗用户没打算用的账号**。
+ *
+ * @returns `undefined` = 没有任何有效字段（调用方据此决定是否保留整条）
+ */
+export declare function sanitizeSubagentRotation(raw: unknown): SubagentRotationSetting | undefined;
 /**
  * 归一化「面板入口」（{@link JetHubState.panelEntry}）。
  *

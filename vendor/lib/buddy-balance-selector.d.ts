@@ -39,7 +39,7 @@ import type { BuddyCredential } from './buddy.js';
 import type { BuddyProduct } from './product.js';
 import { type CreditBalance } from './credits.js';
 import { type BuddyAccountBalance, type BuddyBalanceTier, type BuddyCreditSplit, type BuddyTierOptions } from './buddy-balance-rank.js';
-import type { CreditWindowSetting } from './jet-hub-store.js';
+import type { CreditWindowSetting, RotationStartTier } from './jet-hub-store.js';
 export declare const BUDDY_BALANCE_CACHE_TTL_MS = 60000;
 /**
  * **失败**结果的缓存 TTL（毫秒）—— 比成功短一个数量级。
@@ -381,6 +381,30 @@ export declare class BuddyBalanceSelector<TProduct = BuddyProduct, TCredential =
      * `BUDDY_BALANCE_ERROR_CACHE_TTL_MS`）：把一次抖动缓存满 60 秒，会让
      * 「查不到」伪装成「额度用尽」整整一分钟。
      */
+    /**
+     * ★★★ **从缓存读某账号当前的档位**（2026-11-24，上游审计 P1-3 的修复）。
+     *
+     * ## 为什么要它
+     *
+     * `credential-resolver.ts` 的 `sameTierAsMainStart()` 需要「主代理起点在哪个档」
+     * 才能把子代理的错开限制在**同一档位内**（用户要求「档次优先不变」）。
+     *
+     * ⚠️ **上游审计实测：全仓零实现** ⇒ 那个函数恒走 `typeof !== 'function'` 的
+     * 降级分支 ⇒ 退化为「全量账号」⇒ 子代理可能**先烧永久积分**（违背档次优先）。
+     *
+     * ## ⚠️ 只读缓存，绝不发起网络请求
+     *
+     * 选号路径**不能**因为查档位而多打一次上游（那会把每一发请求的延迟翻倍）。
+     * 缓存没有 / 已过期 ⇒ 返回 `undefined`，由调用方降级（它已支持）。
+     *
+     * ⚠️ 「过期」的判据与 `balanceOf` 的**长 TTL** 一致（成功 60s / 失败 5s）：
+     * 缓存里的原料本身是好的，只是可能旧了 —— 但「档位」这种粗粒度判断
+     * 60 秒内变化极小，且 `splitBuddyCreditsByExpiry` 会用**当前时刻**重算，
+     * 所以旧原料也能给出正确的「相对档位」。
+     *
+     * @returns 0=临期 / 1=短期 / 2=永久 / 3=不可用；无缓存或读失败 ⇒ `undefined`
+     */
+    cachedTierOf(account: BuddyCandidateAccount, allowPermanent: boolean): number | undefined;
     balanceOf(account: BuddyCandidateAccount): Promise<BuddyAccountBalanceEntry>;
     /**
      * 把原料按**当前时刻**分成两桶并定档。
@@ -429,6 +453,20 @@ export declare class BuddyBalanceSelector<TProduct = BuddyProduct, TCredential =
  */
 export interface BuddySelectorLike {
     select(candidates: readonly BuddyCandidateAccount[], options?: BuddyTierOptions): Promise<BuddySelectionResult>;
+    /**
+     * ★★★ **从缓存读某账号当前档位**（2026-11-24，可选能力）。
+     *
+     * 供 `credential-resolver` 的 `sameTierAsMainStart()` 用 —— 它要把子代理的
+     * 错开**限制在主代理起点所在的同一档位内**（用户要求「档次优先不变」）。
+     *
+     * ⚠️ **可选**：单测替身不实现 ⇒ `sameTierAsMainStart` 退化为「全量账号」
+     *（它已支持该降级）。**真实 `BuddyBalanceSelector` 必实现**。
+     *
+     * ⚠️ **只读缓存**，绝不发起网络请求（选号路径不能多打一次上游）。
+     *
+     * @returns 0=临期 / 1=短期 / 2=永久 / 3=不可用；无缓存 ⇒ `undefined`
+     */
+    cachedTierOf?(account: BuddyCandidateAccount, allowPermanent: boolean): number | undefined;
 }
 /**
  * 选号 + 取凭据的完整编排（供 `src/index.ts` 的 buddy 系 provider 调用）。
@@ -497,6 +535,51 @@ export declare function pickBuddyAccount<TCredential = BuddyCredential>(selector
      * 它**不在候选集里**，只按 `ranked.findIndex(id)` 会静默回落默认第一个号。
      */
     enabledAccountIds?: readonly string[];
+    /**
+     * ★★★ **起点选定那一刻的档位快照**（S6，2026-11-20 加；2026-11-23 补透传）。
+     *
+     * 与 {@link BuddyTierOptions.rotationStartTier} 同义 —— 本字段只是把它从
+     * resolver / 接线层透传到 `selector.select()` 的**通道**，
+     * 判据仍在 `rotateFromPreferred` 一处。
+     *
+     * ## ⚠️⚠️ 这个字段曾经**整条链路断在这里**（真实缺陷）
+     *
+     * `credential-resolver.ts` 一直在传它、`rotateFromPreferred` 一直在读它，
+     * **唯独中间的 `pickBuddyAccount` 没声明也没透传** ⇒
+     * `rotateFromPreferred` 永远拿到 `undefined` ⇒
+     * `tierStillHeld` 恒 `false` ⇒ 永远走「起点已降档 ⇒ 交出首位」分支
+     * ⇒ **「起点烧完临期后自动换人」这个机制从未生效**。
+     *
+     * ⚠️ **`tsc` 为什么没拦住**：调用方用的是展开语法
+     * `...(cond ? {} : { rotationStartTier })`，而 TS 的 excess-property 检查
+     * 只作用于**直接的对象字面量**，展开的对象不受检 ⇒「传了类型上没有的字段」
+     * 不报错、「中间层没声明」也不报错，整条链路无声断掉。
+     *
+     * ⚠️ **既有测试为什么没拦住**：`rotation-s6.spec.ts` 是**直接调用**
+     * `rotateFromPreferred`（自造 options）⇒ 证明了「收到 tier 时行为正确」，
+     * 但证明不了「这一层真的把它送过去了」。
+     * 跨层守卫在 `tests/unit/rotation-start-tier-passthrough.spec.ts`。
+     */
+    rotationStartTier?: RotationStartTier;
+    /**
+     * ★★★ **起点绝对第一（无视档位变化）**（2026-11-24）。
+     *
+     * 与 `BuddyTierOptions.pinnedFirst` 同义 —— 本字段只是把它从 resolver
+     * 透传到 `selector.select()` 的**通道**，判据仍在 `rotateFromPreferred` 一处。
+     *
+     * ## ⚠️⚠️ **这个字段曾经整条链路断在这里**（真实缺陷，上游审计实测）
+     *
+     * `credential-resolver.ts` 一直在传、`rotateFromPreferred` 一直在读，
+     * **唯独中间的 `pickBuddyAccount` 没声明也没透传** ⇒
+     * `rotateFromPreferred` 永远拿到 `undefined` ⇒ `pinnedHeld` 恒 `false`
+     * ⇒ 子代理的「固定帐号 / 拉起时定死」**完全不生效**，
+     * 且**零报错**（展开语法 `...(cond ? { pinnedFirst } : {})` 绕过了
+     * TS 的 excess-property 检查）。
+     *
+     * ⚠️ 与 #148 的 `rotationStartTier` 被静默丢弃是**同型缺陷**（同一个函数、
+     * 同一种失败方式）—— 那次也是靠端到端用例才发现的。
+     */
+    pinnedFirst?: boolean;
 }): Promise<{
     kind: 'account';
     account: BuddyCandidateAccount;

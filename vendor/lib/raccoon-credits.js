@@ -49,6 +49,7 @@
  * 打开面板即意外触发签到）。
  */
 import { RACCOON_POINTS_PREFIX, RACCOON_POINTS_V2_PREFIX, RACCOON_DESKTOP_PREFIX, RACCOON_OFFICE_PREFIX, RACCOON_REQUEST_TIMEOUT_MS, raccoonHeaders, } from './raccoon.js';
+import { ensureRaccoonSessionConfirmed } from './raccoon-iam-confirm.js';
 import { RACCOON } from './raccoon-product.js';
 import { roundCredits } from './credits.js';
 /** 登录奖励的默认额度（服务端未在 popup 里给出时兜底）。 */
@@ -89,6 +90,19 @@ function readNumber(value) {
  * 批量操作时单个账号失败不应中断其余账号。
  */
 async function requestJson(url, credential, product, init, fetcher) {
+    /**
+     * ★★★ **IAM 业务会话确认**（issue #147）。
+     *
+     * 2026-11-14 起扫码登录换回的是 **IAM 令牌**，它**不能直接调业务 API** ——
+     * 必须先打一次 `POST /api/web/auth/v1/iam/confirm` 建立业务会话，否则本文件
+     * 的三个端点（余额 / 账单 / 登录奖励）一律回
+     * `400 {"code":200901,"message":"iam_confirm_required"}`，账号看起来「登录成功但完全不可用」。
+     *
+     * ⚠️ **忽略返回值**：确认失败时下面这次业务请求会拿到 `200901` + `details`，
+     *    那个错误比这里编的准。本调用只是**尽力前置**。
+     * ⚠️ 幂等：`ensureRaccoonSessionConfirmed` 按令牌去重，重复调零额外请求。
+     */
+    await ensureRaccoonSessionConfirmed(product, credential, fetcher);
     try {
         const response = await fetcher(url, {
             method: init.method,

@@ -23,6 +23,7 @@
  * 也不做凭据持久化（那是 `raccoon-auth.ts` 的职责）。全部函数可离线单测。
  */
 import { RACCOON_IAM_OK_CODE, RACCOON_IAM_PREFIX, RACCOON_IAM_QR_CREATE_PATH, RACCOON_IAM_QR_EXPIRED_CODE, RACCOON_IAM_QR_INVALID_CODE, RACCOON_IAM_QR_LOGIN_PATH, RACCOON_QR_POLL_INTERVAL_MS, RACCOON_QR_STATUS, RACCOON_REQUEST_TIMEOUT_MS, decodeJwtExpMs, encryptRaccoonPhone, raccoonHeaders, } from './raccoon.js';
+import { ensureRaccoonSessionConfirmed } from './raccoon-iam-confirm.js';
 /** 解析业务信封。`code === 0` 为成功。 */
 function parseEnvelope(payload, status) {
     const record = typeof payload === 'object' && payload !== null && !Array.isArray(payload)
@@ -363,6 +364,9 @@ export async function refreshRaccoonCredential(product, credential, fetcher = fe
  *（实测 `RaccoonAva`），微信扫码不回传微信昵称 —— 故多账号消歧要靠 `phone`。
  */
 export async function fetchRaccoonUserInfo(product, credential, fetcher = fetch) {
+    // ★ IAM 业务会话确认（issue #147）：IAM 令牌直接调 user_info 会回 200901 ⇒
+    //   登录后「补昵称」这一步静默失败，账号卡片永远没有名字。忽略返回值（尽力前置）。
+    await ensureRaccoonSessionConfirmed(product, credential, fetcher);
     try {
         const response = await fetcher(`${product.apiBase}${product.authApiPrefix}/user_info`, {
             method: 'GET',

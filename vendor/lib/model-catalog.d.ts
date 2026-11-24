@@ -133,6 +133,8 @@ export interface ModelCatalogConfig {
     readonly product: {
         readonly id: string;
     };
+    /** Disable the display-only disk cache when entries omit request-routing data. */
+    readonly diskCache?: boolean;
     /**
      * **目录里没有该 id** 时 `resolveModel` 该报什么模态。
      *

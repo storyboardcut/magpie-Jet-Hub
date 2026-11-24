@@ -826,8 +826,24 @@ var STYLES = `
    于是列表区开始滚动。这里只改设置弹窗这一处，**不动 .dim-jh-modal 的通用上限**
    —— 其它弹窗（模型中心等）内容本来就少，抬高它们会让空弹窗显得突兀。
    ⚠️ 仍保留滚动能力（overflow 在 .dim-jh-modalBody 上不变）：窗口很矮时
-   （笔记本 768p）必须还能滚，否则底部按钮会被裁掉、用户点不到「完成」。 */
-.dim-jh-settingsModal { max-height: min(760px, calc(100vh - 48px)); }
+   （笔记本 768p）必须还能滚，否则底部按钮会被裁掉、用户点不到「完成」。
+   2026-11-23 第一次：新增「登录授权」分区后又出现下拉条 ⇒ 高度上限 760 → 940。
+   2026-11-23 第二次（用户要求）：宽度 780 → **840**；并给弹窗加一个**明显的边界**，
+   直接参考「档次窗口」（.dim-jh-windowModal）那两条 ——
+   ① 实边框 1px border-l2（暗色主题下最可靠的「窗口边界」）；
+   ② 内描边 inset 半透明白（浅色主题下 border-l2 太淡，第二道保险）。
+   ⚠️ 只加在设置弹窗上，**不动通用 .dim-jh-modal** —— 其它弹窗没报障，
+      统一改会扩大回归面（与 .dim-jh-windowModal 的注释同一取向）。
+   ⚠️ 分区间距**保持 8/10**（用户明确要求，不做紧凑化）。
+   ⚠️ 840 是宽度上限，不是固定宽：窄窗口仍按 min(840px, 100%) 收缩。 */
+.dim-jh-settingsModal {
+  width: min(840px, 100%);
+  max-height: min(940px, calc(100vh - 48px));
+  border: 1px solid var(--dsw-alias-border-l2);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--dsw-alias-label-primary, #fff) 8%, transparent),
+    0 16px 48px rgba(0, 0, 0, 0.38);
+}
 /* 列表区独立滚动：头部与说明固定，模型多时只滚中间 */
 /* ⚠️ overflow-x: hidden 是**兜底**，不是主修复（主修复见下方 grid 的 minmax）。
    没有它时，任何一行的偶然溢出都会让整个弹窗出现横向滚动条，而横向滚动条会把
@@ -1671,7 +1687,7 @@ col.dim-jh-ledgerColAccount { width: 12.68%; }
 .dim-jh-windowModal {
   min-height: 0;
   /* ① 实边框：暗色主题下最可靠的「窗口边界」 */
-  border: 1px solid var(--dsw-alias-border-l2, #3a3d45);
+  border: 1px solid var(--dsw-alias-border-l2);
   /* ② 内描边：浅色主题下的第二道保险（border-l2 在浅色下太淡） */
   box-shadow:
     inset 0 0 0 1px color-mix(in srgb, var(--dsw-alias-label-primary, #fff) 8%, transparent),
@@ -1687,6 +1703,106 @@ col.dim-jh-ledgerColAccount { width: 12.68%; }
  *    （用户要求「在红色框里面分别用红色和黄色写明覆盖多少个帐号」= 紧贴输入）。
  */
 .dim-jh-windowField { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+
+/* ===== 子代理设置（2026-11-23）===== */
+/*
+ * 与「分档窗口」同一视觉体系：金色分区标题 + 虚线分隔。
+ * ⚠️ 注释里不写反引号与尖括号：本文件整体是模板字符串，
+ *    反引号会提前闭合字符串（真实构建失败，本仓踩过）。
+ */
+.dim-jh-subagentSection {
+  border-top: 1px dashed var(--dsw-alias-border-l2);
+  margin: 12px 0 10px;
+  padding-top: 10px;
+  display: flex; flex-direction: column; gap: 7px;
+}
+.dim-jh-subagentTitle {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px; font-weight: 700;
+  color: #b8860b;
+}
+.dim-jh-subagentNew {
+  padding: 0 5px; border-radius: 4px;
+  font-size: 9px; font-weight: 600;
+  color: var(--dsw-alias-brand-primary, #1677ff);
+  background: rgba(76, 141, 255, 0.16);
+}
+.dim-jh-subagentLabel { font-size: 11px; font-weight: 600; }
+/* 五按钮分段控件：等宽，紧贴一行 */
+.dim-jh-subagentSeg {
+  display: flex;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: 7px;
+  overflow: hidden;
+}
+.dim-jh-subagentSegBtn {
+  flex: 1; min-width: 0;
+  padding: 5px 2px;
+  font: inherit; font-size: 10.5px;
+  border: 0;
+  border-right: 0.5px solid var(--dsw-alias-border-l2);
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dim-jh-subagentSegBtn:last-child { border-right: 0; }
+.dim-jh-subagentSegBtn[data-on="true"] {
+  background: var(--dsw-alias-brand-primary, #1677ff);
+  color: var(--dsw-alias-label-primary-foreground, #fff);
+  font-weight: 600;
+}
+.dim-jh-subagentSegBtn:disabled { opacity: 0.45; cursor: default; }
+/* 提示：一行，超长省略（用户要求「不要超过一行」） */
+.dim-jh-subagentHint {
+  font-size: 10.5px;
+  color: var(--dsw-alias-label-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 「固定帐号」的账号选择行 */
+.dim-jh-subagentFixed {
+  display: flex; align-items: center; gap: 7px;
+  padding: 6px 8px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: 7px;
+  background: var(--dsw-alias-bg-layer-2);
+}
+.dim-jh-subagentFixedLabel {
+  flex: none; font-size: 10.5px;
+  color: var(--dsw-alias-label-secondary);
+}
+.dim-jh-subagentSelect {
+  flex: 1; min-width: 0;
+  padding: 4px 6px;
+  font: inherit; font-size: 11px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: 5px;
+  background: var(--dsw-alias-bg-layer-3);
+  color: var(--dsw-alias-label-primary);
+}
+/* 模型 + 思考强度 同一行 */
+.dim-jh-subagentModelRow { display: flex; gap: 7px; align-items: center; }
+.dim-jh-subagentSelectWide { flex: 1; }
+.dim-jh-subagentEffort { flex: 0 0 112px; }
+/*
+ * 「该模型无思考档位」的提示（2026-11-24）。
+ *
+ * ⚠️ 用 warn 色（不是 tertiary 灰）：这是**用户需要知道的信息**
+ *    （他选了模型却没有强度可选，会以为功能坏了）。
+ * ⚠️ 不写回退值：本仓纪律 —— 回退值只允许 baseline 表里那 6 个。
+ */
+.dim-jh-subagentNoEffort {
+  flex: none;
+  font-size: 10px;
+  color: var(--dsw-alias-state-warn-primary);
+  white-space: nowrap;
+  cursor: help;
+}
+
 .dim-jh-windowLabel { display: flex; align-items: center; gap: 7px; flex-wrap: nowrap; font-size: 11.5px; font-weight: 600; color: var(--dsw-alias-label-primary); }
 .dim-jh-windowDot { width: 8px; height: 8px; flex: none; border-radius: 999px; }
 .dim-jh-windowDot[data-tone="imminent"] { background: var(--dsw-alias-state-error-primary, #d93025); }
@@ -1996,6 +2112,48 @@ col.dim-jh-ledgerColAccount { width: 12.68%; }
    它会连同右侧模型选择器一起溢出。允许收缩后，空间不足时胶囊与选择器一起让位，
    且胶囊内部退化是有序的（先名字出省略号，数字最后才动）。 */
 .dim-jh-badge { position: relative; display: flex; align-items: center; flex: 0 1 auto; min-width: 0; }
+/*
+ * ★★★ 子代理页面的「模型 + 思考强度」pill（2026-11-24 用户需求）。
+ *
+ * ## 为什么需要（本插件自己画）
+ *
+ * 宿主**只在主对话页**渲染模型选择器；子代理对话页宿主不渲染
+ * ⇒ 用户看不出子代理在用哪个模型/哪档强度。
+ *
+ * ## ⚠️ 视觉必须模仿宿主（用户逐字要求）
+ *
+ * 「要注意到思考强度字体是比模型名要暗一点的，要模仿到位，然后是没有下拉的」
+ *
+ * | 元素 | 样式 | 理由 |
+ * |---|---|---|
+ * | 模型名 | label-primary + 11px | 宿主主色 |
+ * | 思考强度 | **label-tertiary（更暗）** | 用户明确要求 |
+ * | 下拉箭头 | **不画** | 用户明确要求；它不可点，画了会误导 |
+ *
+ * ⚠️ 与胶囊之间留 8px：宿主主代理页面就是这个间距感。
+ * ⚠️ 不写回退值：本仓纪律 —— 回退值只允许 baseline 表里那 6 个。
+ */
+.dim-jh-badgeModelPill {
+  display: flex; align-items: center; gap: 5px;
+  margin-left: 10px;
+  font-size: 14px; line-height: 1.5;
+  white-space: nowrap;
+  flex: none;
+}
+/* 模型名：亮色（与宿主的模型选择器同色阶） */
+.dim-jh-badgeModelName {
+  color: var(--dsw-alias-label-primary);
+  font-variant-numeric: tabular-nums;
+}
+/*
+ * 思考强度：**更暗一档**（用户逐字要求）。
+ * 用 tertiary 而不是 secondary —— secondary 与胶囊内文字同色，
+ * 视觉上会和模型名拉不开差距（实测对比度差只有一档）。
+ */
+.dim-jh-badgeModelEffort {
+  color: var(--dsw-alias-label-tertiary);
+  font-variant-numeric: tabular-nums;
+}
 /* ⚠️ box-sizing 是**显式写出**的，不是修复：button 的 UA 默认样式表本就是
    border-box（实测 offsetWidth 与 max-width 相等）。写上它只为在元素类型被改
    （span/div 默认是 content-box）时语义不悄悄漂移 —— 那种情况下 max-width 会从
@@ -4297,12 +4455,15 @@ var PROVIDER_REGISTRY = Object.freeze([
     //   ⚠️ 为什么不能改 `false`：那会让 `createProviderCredits()` 少一条
     //   ⇒ `credits.claimAll` 对豆包回 `unsupported provider: doubao` ⇒ 签到静默失效。
     credits: { balance: true, dailyCheckin: true },
-    // ⚠️ **签到有代价 ⇒ 不进每日自动链**（2026-11-03，与 zcode captcha 同型）：
-    //    签到要带 `a_bogus` 签名，它由豆包页面上下文的 `bdms.frontierSign` 生成 ⇒
-    //    每次领取都要现场起一棵浏览器进程树（挂豆包 User Data）。默认开启的自动签到
-    //    等于「用户什么都没点、开 DSH 就起浏览器」—— 白耗资源。用户仍可**手动**签到
-    //   （面板点「一键领取积分」，那是有意行为）。
-    autoCheckinExcluded: true,
+    // ✅ **进每日自动链**（2026-11-22 变更，原为排除）：
+    //    签到的 `a_bogus` 签名确实要起一次 headless Chromium（`--headless=new`，
+    //    `src/doubao-signin.ts` 的 spawn 参数），但代价是**每账号每天一次、
+    //    单次几十秒**，与 zcode 那个「按设备烧阿里云 captcha 配额」不同源 ——
+    //    zcode 是拿第三方配额换积分，豆包只是本地起一个临时 profile 的浏览器。
+    //    默认开启的收益（每天自动 +200 额度）大于这点开销，故不再排除。
+    //    ⚠️ 想退出自动链的用户可把该渠道的账号**停用**（停用账号不参与选号与签到），
+    //    或把面板上的渠道开关关掉，无需改代码。
+    autoCheckinExcluded: false,
     // ⚠️ `rateLimit: false` 必须显式写：本渠道当前没有适配器、不写
     //    `modelRateLimits`、也不在 `probeById` 里 ⇒ 「重测 / 重置」点下去恒惰性
     //   （与 magicrew / accio 旧格同因）。将来接推理链路时再翻正。
@@ -4318,7 +4479,12 @@ var PROVIDER_REGISTRY = Object.freeze([
     //    让签到入口照常出现（`checkinProviders()` 按 `supportsDailyCheckin` 过滤），
     //    `balance: true` 让豆包进 credits 表（签到的 `claim` 走同一张表；余额那一腿
     //    由端点短路成空列表，见上方 `credits` 那条）。
-    //    将来接推理链路（目录/适配器/auth）时把本行翻 `true` 并补齐派生登记。
+    // ⚠️ 2026-11-22 更正：模型目录/适配器已接通（src/doubao-adapter.ts），
+    //    已进 modelAdapters 表 ⇒ 运行时 noModelLeg 门（channel===false AND
+    //    modelAdapters[provider]===undefined）不成立，模型腿照常读取、对话照常路由。
+    //    这里**刻意保持 false**：豆包凭据是 cookie（无 refresh 端点、无 auth 服务），
+    //    翻 true 会点燃「channel ⇒ 必须有 auth/聚合/续期」三张派生守卫（与 codely 当年
+    //    channel:false 但有目录的形态同型）。签到与余额两条腿独立于 channel。
     channel: false
   },
   {
@@ -4804,10 +4970,10 @@ function providerSwitchState(status) {
   }
   return { checked: true, disabled: false, reason: null };
 }
-function summarizeProviderToggle(enabled, res) {
+function summarizeProviderToggle(enabled2, res) {
   const models = typeof res?.models === "number" ? res.models : 0;
   const accounts = typeof res?.accounts === "number" ? res.accounts : 0;
-  if (enabled) {
+  if (enabled2) {
     const parts2 = [];
     parts2.push(models > 0 ? `已打开 ${models} 个模型` : "模型本就全部打开");
     parts2.push(accounts > 0 ? `已启用 ${accounts} 个账号` : "账号本就全部启用");
@@ -6810,7 +6976,7 @@ function installRateLimitResumeUi(options) {
   };
 }
 function RateLimitResumeSection({ rpcCall }) {
-  const [enabled, setEnabled] = React7.useState(true);
+  const [enabled2, setEnabled] = React7.useState(true);
   const [busy, setBusy] = React7.useState(false);
   const [failed, setFailed] = React7.useState(false);
   const [hooks, setHooks] = React7.useState([]);
@@ -6937,7 +7103,7 @@ function RateLimitResumeSection({ rpcCall }) {
       React7.createElement("input", {
         type: "checkbox",
         className: "dim-jh-switch",
-        checked: enabled,
+        checked: enabled2,
         disabled: busy,
         onChange: (event) => {
           void commit(event.target.checked);
@@ -7638,6 +7804,102 @@ function buildCreateAccountPayload(provider, zcodeProvider, accioRegion, astudio
   return { provider, autoclawMode: autoclawMode ?? "local" };
 }
 
+// plugin-src/client/login-preferences-store.js
+var READ_TIMEOUT_MS = 5e3;
+var READ_ATTEMPTS = 3;
+var RETRY_DELAY_MS = 200;
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+var enabled = true;
+var readFailed = false;
+var inflight = null;
+var writeSeq = 0;
+var listeners = /* @__PURE__ */ new Set();
+function loginAutoOpenEnabled() {
+  return enabled;
+}
+function loginAutoOpenReadFailed() {
+  return readFailed;
+}
+function subscribeLoginAutoOpen(listener) {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+function publish(nextEnabled, nextFailed) {
+  if (enabled === nextEnabled && readFailed === nextFailed) return;
+  enabled = nextEnabled;
+  readFailed = nextFailed;
+  for (const listener of [...listeners]) {
+    try {
+      listener();
+    } catch (caught) {
+      console.error("[jet-hub] 自动打开浏览器开关的监听器抛错", caught);
+    }
+  }
+}
+function readSignal() {
+  if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
+    return AbortSignal.timeout(READ_TIMEOUT_MS);
+  }
+  if (typeof AbortController !== "function") return void 0;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), READ_TIMEOUT_MS);
+  if (typeof timer === "object" && timer !== null && typeof timer.unref === "function") {
+    timer.unref();
+  }
+  controller.signal?.addEventListener?.("abort", () => clearTimeout(timer), { once: true });
+  return controller.signal;
+}
+function loadLoginAutoOpen(rpcCall) {
+  if (inflight !== null) return inflight;
+  const seqAtStart = writeSeq;
+  const task = (async () => {
+    let lastError;
+    for (let attempt = 1; attempt <= READ_ATTEMPTS; attempt += 1) {
+      try {
+        const result = await rpcCall("loginPreferences.getEnabled", {}, readSignal());
+        if (writeSeq !== seqAtStart) return enabled;
+        if (typeof result?.enabled === "boolean") {
+          publish(result.enabled, false);
+        } else {
+          publish(enabled, true);
+        }
+        return enabled;
+      } catch (caught) {
+        lastError = caught;
+        if (writeSeq !== seqAtStart) return enabled;
+        if (attempt >= READ_ATTEMPTS) break;
+        await delay(RETRY_DELAY_MS * attempt);
+        if (writeSeq !== seqAtStart) return enabled;
+      }
+    }
+    console.warn(
+      `[jet-hub] 读取「自动打开浏览器」开关失败，按开启处理（已重试 ${READ_ATTEMPTS - 1} 次）`,
+      lastError
+    );
+    if (writeSeq === seqAtStart) publish(enabled, true);
+    return enabled;
+  })();
+  inflight = task;
+  const clear = () => {
+    if (inflight === task) inflight = null;
+  };
+  void task.then(clear, clear);
+  return task;
+}
+async function setLoginAutoOpen(rpcCall, next) {
+  const result = await rpcCall("loginPreferences.setEnabled", { enabled: next });
+  if (typeof result?.enabled !== "boolean") {
+    throw new Error("「自动打开浏览器」开关没有返回合法 enabled");
+  }
+  writeSeq += 1;
+  publish(result.enabled, false);
+  return result.enabled;
+}
+
 // plugin-src/client/marvis-login-modal.js
 var import_react = __toESM(require("react"), 1);
 function MarvisLoginModal({ error, busy, onQq, onWechat, onImport, onClose }) {
@@ -7879,7 +8141,8 @@ function isLoopbackHost(host) {
 }
 
 // plugin-src/client/openai-gateway-panel.js
-async function copyToClipboard(value) {
+async function copyToClipboard(value, options) {
+  const silent = options?.silent === true;
   try {
     if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(value);
@@ -7888,6 +8151,7 @@ async function copyToClipboard(value) {
   } catch {
   }
   if (legacyCopy(value)) return true;
+  if (silent) return false;
   showManualCopy(value);
   return false;
 }
@@ -8174,9 +8438,9 @@ function gatewayEffortsHintLines(models) {
     return ["当前已开启的模型都没声明思考档位：网关不下发该参数，按模型默认走。"];
   }
   const lossy = rows.filter((row) => row.lossy).length;
-  const enabled = Array.isArray(models) ? models.length : rows.length;
+  const enabled2 = Array.isArray(models) ? models.length : rows.length;
   return [
-    `已开启的 ${enabled} 个模型里，有 ${rows.length} 个可选思考档位${lossy > 0 ? `（${lossy} 个不同名，标「需对照」）` : ""}。`,
+    `已开启的 ${enabled2} 个模型里，有 ${rows.length} 个可选思考档位${lossy > 0 ? `（${lossy} 个不同名，标「需对照」）` : ""}。`,
     "「客户端该填」为 CC Switch 需配置的映射档位，未登记的档位名称将被拒绝。"
   ];
 }
@@ -9630,6 +9894,80 @@ function windowRangeLabels(windowDays, imminentDays) {
     permanent: `永久  ≥ ${windowDays} 天`
   };
 }
+var SUBAGENT_MODE_LABELS = [
+  ["follow", "跟随主代理"],
+  ["sequence", "顺序分布"],
+  ["reverse", "倒序分布"],
+  ["hash", "哈希分布"],
+  ["fixed", "固定帐号"]
+];
+var SUBAGENT_MODE_HINTS = {
+  follow: "与主代理同账号起步，档位规则不变（仍先烧临期）",
+  sequence: "子代理在主代理同档位内往后错开，仍先烧临期",
+  reverse: "子代理在主代理同档位内往前错开，仍先烧临期",
+  hash: "按会话 ID 稳定分配同档位账号，仍先烧临期",
+  fixed: "该号绝对优先（无视档位），积分为空或锁定不可用才切换"
+};
+function subagentHintOf(mode) {
+  const hit = SUBAGENT_MODE_HINTS[mode];
+  return hit === void 0 ? SUBAGENT_MODE_HINTS.follow : hit;
+}
+function defaultEffortOf(entry2) {
+  if (entry2 === null || typeof entry2 !== "object") return void 0;
+  const efforts = Array.isArray(entry2.efforts) ? entry2.efforts : [];
+  if (efforts.length === 0) return void 0;
+  const declared = typeof entry2.defaultEffort === "string" ? entry2.defaultEffort : "";
+  if (declared.length > 0 && efforts.some((e) => e !== null && typeof e === "object" && e.id === declared)) {
+    return declared;
+  }
+  const last = efforts[efforts.length - 1];
+  return last !== null && typeof last === "object" && typeof last.id === "string" ? last.id : void 0;
+}
+function validateSubagentDraft(draft) {
+  if (draft === null || typeof draft !== "object") {
+    return { ok: false, message: "设置为空" };
+  }
+  const mode = draft.startMode;
+  const known = SUBAGENT_MODE_LABELS.some(([id]) => id === mode);
+  if (!known) return { ok: false, message: "请选择一个起点策略" };
+  if (mode === "fixed") {
+    const pos = draft.fixedPosition;
+    if (typeof pos !== "number" || !Number.isInteger(pos) || pos < 1) {
+      return { ok: false, message: "「固定帐号」必须选一个账号" };
+    }
+  }
+  return { ok: true };
+}
+function subagentPayloadOf(draft) {
+  if (draft === null || typeof draft !== "object") return void 0;
+  const mode = draft.startMode;
+  if (mode === void 0) return void 0;
+  return {
+    startMode: mode,
+    ...mode === "fixed" && typeof draft.fixedPosition === "number" ? { fixedPosition: draft.fixedPosition } : {},
+    ...typeof draft.model === "string" && draft.model.length > 0 ? { model: draft.model } : {},
+    ...typeof draft.reasoningEffort === "string" && draft.reasoningEffort.length > 0 ? { reasoningEffort: draft.reasoningEffort } : {}
+  };
+}
+function isWindowDirty(input) {
+  const src = input === null || typeof input !== "object" ? {} : input;
+  const saved = src.saved;
+  if (saved === null || typeof saved !== "object") return false;
+  const draftWindow = typeof src.draftWindow === "string" ? src.draftWindow.trim() : "";
+  const draftImminent = typeof src.draftImminent === "string" ? src.draftImminent.trim() : "";
+  if (String(saved.windowDays) !== draftWindow) return true;
+  if (String(saved.imminentDays) !== draftImminent) return true;
+  const subDraft = src.subDraft;
+  if (subDraft === null || typeof subDraft !== "object") return false;
+  const savedSub = saved.subagent;
+  const savedObj = savedSub === null || typeof savedSub !== "object" ? {} : savedSub;
+  const normMode = (v) => typeof v === "string" && v.length > 0 ? v : "follow";
+  if (normMode(subDraft.startMode) !== normMode(savedObj.startMode)) return true;
+  if ((subDraft.fixedPosition ?? 0) !== (savedObj.fixedPosition ?? 0)) return true;
+  if ((subDraft.model ?? "") !== (savedObj.model ?? "")) return true;
+  if ((subDraft.reasoningEffort ?? "") !== (savedObj.reasoningEffort ?? "")) return true;
+  return false;
+}
 
 // plugin-src/client/jet-hub.js
 var JET_HUB_RPC_CHANNEL = "/jet-hub";
@@ -9649,6 +9987,9 @@ function CreditWindowModal(props) {
   const [saveError, setSaveError] = React10.useState("");
   const [draftWindow, setDraftWindow] = React10.useState("");
   const [draftImminent, setDraftImminent] = React10.useState("");
+  const [subDraft, setSubDraft] = React10.useState(null);
+  const [modelList, setModelList] = React10.useState(null);
+  const [rotationAccounts, setRotationAccounts] = React10.useState(null);
   React10.useEffect(() => {
     let alive = true;
     void (async () => {
@@ -9662,8 +10003,33 @@ function CreditWindowModal(props) {
         setSaved(res);
         setDraftWindow(String(res.windowDays));
         setDraftImminent(String(res.imminentDays));
+        if (alive) {
+          const sub = res?.subagent;
+          setSubDraft({
+            startMode: typeof sub?.startMode === "string" ? sub.startMode : "follow",
+            fixedPosition: typeof sub?.fixedPosition === "number" ? sub.fixedPosition : void 0,
+            model: typeof sub?.model === "string" ? sub.model : void 0,
+            reasoningEffort: typeof sub?.reasoningEffort === "string" ? sub.reasoningEffort : void 0
+          });
+        }
       } catch (caught) {
         if (alive) setLoadError(caught instanceof Error ? caught.message : String(caught));
+      }
+    })();
+    void (async () => {
+      try {
+        const models = await rpcCall("credits.window.models", { provider });
+        if (alive) setModelList(Array.isArray(models?.models) ? models.models : []);
+      } catch {
+        if (alive) setModelList([]);
+      }
+    })();
+    void (async () => {
+      try {
+        const rot = await rpcCall("credits.window.accounts", { provider });
+        if (alive) setRotationAccounts(Array.isArray(rot?.accounts) ? rot.accounts : []);
+      } catch {
+        if (alive) setRotationAccounts([]);
       }
     })();
     return () => {
@@ -9680,7 +10046,7 @@ function CreditWindowModal(props) {
   const coverage = computeCoverage(accounts(), effectiveWindow, effectiveImminent, Date.now());
   const ranges = windowRangeLabels(effectiveWindow, effectiveImminent);
   const previewTotal = coverageTotal(coverage);
-  const dirty = saved !== null && (String(saved.windowDays) !== draftWindow.trim() || String(saved.imminentDays) !== draftImminent.trim());
+  const dirty = isWindowDirty({ saved, draftWindow, draftImminent, subDraft });
   const onSave = async () => {
     if (windowInvalid || imminentInvalid) return;
     setBusy(true);
@@ -9691,7 +10057,10 @@ function CreditWindowModal(props) {
       const imminentChanged = typeof parsedImminent === "number" && parsedImminent !== saved?.imminentDays;
       if (windowChanged) payload.windowDays = parsedWindow;
       if (imminentChanged) payload.imminentDays = parsedImminent;
-      if (payload.windowDays === void 0 && payload.imminentDays === void 0) {
+      const subInvalid = validateSubagentDraft(subDraft);
+      const subPayload = subInvalid.ok ? subagentPayloadOf(subDraft) : void 0;
+      if (subPayload !== void 0) payload.subagent = subPayload;
+      if (payload.windowDays === void 0 && payload.imminentDays === void 0 && payload.subagent === void 0) {
         onClose();
         return;
       }
@@ -9882,6 +10251,129 @@ ${message}`);
               })
             )
           ))
+        ),
+        /*
+         * ★★★ **子代理专属设置**（2026-11-23）。
+         *
+         * ## 布局（用户 2026-11-23 选定的「方案 A」）
+         *
+         * ```
+         * ── 子代理设置 [新] ─────────────
+         * 轮换起点
+         * [跟随主代理][顺序分布][倒序分布][哈希分布][固定帐号]
+         * 提示一行（随选中项变化，≤ 30 字）
+         * 模型
+         * [跟随主代理 ▾]  [思考强度 ▾]      ← 选了具体模型才出现右侧
+         * ```
+         *
+         * ⚠️ 只在「选了固定帐号」时多一行账号下拉 —— 其余模式不需要额外输入。
+         */
+        React10.createElement(
+          "div",
+          { className: "dim-jh-subagentSection" },
+          React10.createElement(
+            "div",
+            { className: "dim-jh-subagentTitle" },
+            React10.createElement("span", null, "子代理设置"),
+            React10.createElement("span", { className: "dim-jh-subagentNew" }, "新")
+          ),
+          React10.createElement("div", { className: "dim-jh-subagentLabel" }, "轮换起点"),
+          React10.createElement(
+            "div",
+            { className: "dim-jh-subagentSeg" },
+            SUBAGENT_MODE_LABELS.map(([id, label]) => React10.createElement("button", {
+              key: id,
+              type: "button",
+              className: "dim-jh-subagentSegBtn",
+              "data-on": (subDraft?.startMode ?? "follow") === id ? "true" : "false",
+              disabled: busy,
+              onClick: () => setSubDraft((prev) => ({
+                startMode: id,
+                // ⚠️ 切到非 fixed 时**清掉位次**：留着会让用户困惑「怎么自己选了」
+                ...id === "fixed" ? { fixedPosition: prev?.fixedPosition ?? 1 } : {},
+                ...prev?.model === void 0 ? {} : { model: prev.model },
+                ...prev?.reasoningEffort === void 0 ? {} : { reasoningEffort: prev.reasoningEffort }
+              }))
+            }, label))
+          ),
+          React10.createElement(
+            "div",
+            { className: "dim-jh-subagentHint" },
+            subagentHintOf(subDraft?.startMode ?? "follow")
+          ),
+          /*
+           * 「固定帐号」时的账号下拉。
+           *
+           * ⚠️ 选项来自 `account.getRotation` 的 `accounts`（位次 + 昵称），
+           *   与「主代理起点」那个下拉**同一个数据源**（用户看到的位次一致）。
+           */
+          (subDraft?.startMode ?? "follow") === "fixed" ? React10.createElement(
+            "div",
+            { className: "dim-jh-subagentFixed" },
+            React10.createElement("span", { className: "dim-jh-subagentFixedLabel" }, "固定使用"),
+            React10.createElement("select", {
+              className: "dim-jh-subagentSelect",
+              disabled: busy,
+              value: String(subDraft?.fixedPosition ?? 1),
+              onChange: (event) => {
+                const pos = Number(event.target.value);
+                setSubDraft((prev) => ({ ...prev, fixedPosition: Number.isInteger(pos) ? pos : 1 }));
+              }
+            }, (Array.isArray(rotationAccounts) ? rotationAccounts : []).map((acct) => React10.createElement("option", {
+              key: acct.position,
+              value: String(acct.position)
+            }, `位次 ${acct.position} · ${acct.nickname ?? "（无名）"}`)))
+          ) : null,
+          /* ---- 模型 + 思考强度 ---- */
+          React10.createElement("div", { className: "dim-jh-subagentLabel" }, "模型"),
+          React10.createElement(
+            "div",
+            { className: "dim-jh-subagentModelRow" },
+            React10.createElement(
+              "select",
+              {
+                className: "dim-jh-subagentSelect dim-jh-subagentSelectWide",
+                disabled: busy,
+                value: subDraft?.model ?? "",
+                onChange: (event) => {
+                  const model = event.target.value;
+                  const entry2 = (Array.isArray(modelList) ? modelList : []).find((m) => m.id === model);
+                  setSubDraft((prev) => ({
+                    ...prev,
+                    model: model.length === 0 ? void 0 : model,
+                    reasoningEffort: model.length === 0 ? void 0 : defaultEffortOf(entry2)
+                  }));
+                }
+              },
+              React10.createElement("option", { value: "" }, "跟随主代理"),
+              (Array.isArray(modelList) ? modelList : []).map((m) => React10.createElement("option", {
+                key: m.id,
+                value: m.id
+              }, m.name))
+            ),
+            /* 思考强度：**只在选了具体模型、且该模型支持思考时**出现。 */
+            (() => {
+              const entry2 = (Array.isArray(modelList) ? modelList : []).find((m) => m.id === subDraft?.model);
+              const efforts = Array.isArray(entry2?.efforts) ? entry2.efforts : [];
+              if (efforts.length === 0) {
+                if (subDraft?.model === void 0 || subDraft.model.length === 0) return null;
+                return React10.createElement("span", {
+                  className: "dim-jh-subagentNoEffort",
+                  title: "该模型未提供思考档位（上游目录没有下发），选它时无法指定强度"
+                }, "该模型无思考档位");
+              }
+              return React10.createElement("select", {
+                className: "dim-jh-subagentSelect dim-jh-subagentEffort",
+                disabled: busy,
+                title: "思考强度（默认取最强档）",
+                value: subDraft?.reasoningEffort ?? defaultEffortOf(entry2) ?? "",
+                onChange: (event) => setSubDraft((prev) => ({
+                  ...prev,
+                  reasoningEffort: event.target.value.length === 0 ? void 0 : event.target.value
+                }))
+              }, efforts.map((e) => React10.createElement("option", { key: e.id, value: e.id }, e.name)));
+            })()
+          )
         ),
         saveError === "" ? null : React10.createElement("p", { className: "dim-jh-modalHint dim-jh-windowInvalid" }, saveError)
       ),
@@ -12755,7 +13247,7 @@ function accioResetSeconds(packages, now) {
   return Math.max(0, Math.round((end - at) / 1e3));
 }
 function QoderTrafficGuardToggle({ provider, rpcCall }) {
-  const [enabled, setEnabled] = React10.useState(null);
+  const [enabled2, setEnabled] = React10.useState(null);
   const [busy, setBusy] = React10.useState(false);
   const [error, setError] = React10.useState("");
   const [loadAttempt, setLoadAttempt] = React10.useState(0);
@@ -12777,7 +13269,7 @@ function QoderTrafficGuardToggle({ provider, rpcCall }) {
     };
   }, [provider, rpcCall, loadAttempt]);
   const update = async (nextEnabled) => {
-    if (enabled === null || saving.current) return;
+    if (enabled2 === null || saving.current) return;
     saving.current = true;
     setBusy(true);
     setError("");
@@ -12805,14 +13297,14 @@ function QoderTrafficGuardToggle({ provider, rpcCall }) {
         className: "dim-jh-switch",
         type: "checkbox",
         role: "switch",
-        checked: enabled === true,
-        disabled: busy || enabled === null,
+        checked: enabled2 === true,
+        disabled: busy || enabled2 === null,
         onChange: (event) => void update(event.target.checked)
       }),
       React10.createElement("span", null, "单账号限流")
     ),
     error ? React10.createElement("span", { className: "dim-jh-settingsInlineFail", role: "alert" }, error) : null,
-    enabled === null && error ? React10.createElement("button", {
+    enabled2 === null && error ? React10.createElement("button", {
       type: "button",
       className: "dim-jh-btn",
       onClick: () => setLoadAttempt((attempt) => attempt + 1)
@@ -12820,7 +13312,7 @@ function QoderTrafficGuardToggle({ provider, rpcCall }) {
   );
 }
 function ModelscopeAutoCheckinToggle({ rpcCall }) {
-  const [enabled, setEnabled] = React10.useState(null);
+  const [enabled2, setEnabled] = React10.useState(null);
   const [busy, setBusy] = React10.useState(false);
   const [error, setError] = React10.useState("");
   const saveInFlight = React10.useRef(false);
@@ -12864,8 +13356,8 @@ function ModelscopeAutoCheckinToggle({ rpcCall }) {
       React10.createElement("input", {
         type: "checkbox",
         role: "switch",
-        checked: enabled === true,
-        disabled: enabled === null || busy,
+        checked: enabled2 === true,
+        disabled: enabled2 === null || busy,
         onChange: (event) => void save(event.target.checked)
       }),
       "魔搭自动签到"
@@ -12874,7 +13366,7 @@ function ModelscopeAutoCheckinToggle({ rpcCall }) {
   );
 }
 function ZcodeAutoCheckinToggle({ rpcCall }) {
-  const [enabled, setEnabled] = React10.useState(null);
+  const [enabled2, setEnabled] = React10.useState(null);
   const [busy, setBusy] = React10.useState(false);
   const [error, setError] = React10.useState("");
   const saveInFlight = React10.useRef(false);
@@ -12918,8 +13410,8 @@ function ZcodeAutoCheckinToggle({ rpcCall }) {
       React10.createElement("input", {
         type: "checkbox",
         role: "switch",
-        checked: enabled === true,
-        disabled: enabled === null || busy,
+        checked: enabled2 === true,
+        disabled: enabled2 === null || busy,
         onChange: (event) => void save(event.target.checked)
       }),
       "ZCode 自动签到"
@@ -12962,6 +13454,7 @@ function ProviderPanel({
   const [imminentWindowDays, setImminentWindowDays] = React10.useState(null);
   const [loginUrlForManual, setLoginUrlForManual] = React10.useState(null);
   const [loginLinkCopied, setLoginLinkCopied] = React10.useState(null);
+  const [loginManualMode, setLoginManualMode] = React10.useState(false);
   const [manualCallback, setManualCallback] = React10.useState(null);
   const manualSubmitInFlightRef = React10.useRef(false);
   const [proxyModal, setProxyModal] = React10.useState(null);
@@ -13222,11 +13715,11 @@ function ProviderPanel({
   }, [provider, loadCredits]);
   const nextModelscopeExpiry = provider === "modelscope" ? Math.min(...Object.values(credits).map((item) => item.balance?.dailyGrantExpiresAt ?? Infinity)) : Infinity;
   React10.useEffect(() => {
-    const delay2 = nextModelscopeExpiry - Date.now();
-    if (!Number.isFinite(delay2) || delay2 <= 0 || delay2 > 864e5) return;
+    const delay3 = nextModelscopeExpiry - Date.now();
+    if (!Number.isFinite(delay3) || delay3 <= 0 || delay3 > 864e5) return;
     const timeout = setTimeout(() => {
       if (typeof document === "undefined" || !document.hidden) void loadCredits(true, true);
-    }, delay2 + 1e3);
+    }, delay3 + 1e3);
     return () => clearTimeout(timeout);
   }, [nextModelscopeExpiry, loadCredits]);
   const [claiming, setClaiming] = React10.useState(false);
@@ -13925,6 +14418,7 @@ function ProviderPanel({
       console.log("[jet-hub] account.create ok, provider =", provider, ", accountId =", accountId);
       if (res.reused) {
         setLoginUrlForManual(null);
+        setLoginManualMode(false);
         await loadAccounts();
         setProbeNotice({ tone: "ok", text: "已复用本机已有的账号凭据，未新建账号。", details: [] });
         return;
@@ -13937,7 +14431,13 @@ function ProviderPanel({
       if (loginUrl) {
         let loginWindow = null;
         let skipClientOpen = false;
-        if (res.incognitoOpened === true) {
+        if (!loginAutoOpenEnabled()) {
+          const manualUrl = typeof res.forcedLoginUrl === "string" && res.forcedLoginUrl.length > 0 ? res.forcedLoginUrl : loginUrl;
+          setLoginUrlForManual(manualUrl);
+          setLoginManualMode(true);
+          setLoginLinkCopied(await copyToClipboard(manualUrl, { silent: true }));
+          skipClientOpen = true;
+        } else if (res.incognitoOpened === true) {
           console.log("[jet-hub] 宿主也以无痕窗口打开过授权页");
           const canConfirm = typeof window !== "undefined" && typeof window.confirm === "function";
           const confirmed = canConfirm ? window.confirm(
@@ -14026,6 +14526,7 @@ function ProviderPanel({
       if (Date.now() > deadline) {
         if (loginWindow && !loginWindow.closed) loginWindow.close();
         setLoginUrlForManual(null);
+        setLoginManualMode(false);
         setManualCallback(null);
         setError("登录超时或未完成（已等待 5 分钟）：可能是授权未完成、授权被拒，或账号条目已被删除。请重新点击「+ 新建账号」再试一次；若账号其实已经添加，可点「重新读取」查看。" + (pollErrorCount > 0 ? `（期间有 ${pollErrorCount} 次轮询请求本身失败，最后一次：${lastPollError}）` : ""));
         setPhase("error");
@@ -14038,6 +14539,7 @@ function ProviderPanel({
         if (pollRes?.success === false) {
           if (loginWindow && !loginWindow.closed) loginWindow.close();
           setLoginUrlForManual(null);
+          setLoginManualMode(false);
           setManualCallback(null);
           setError(pollRes.error || "登录失败（宿主未给出原因），请重新点击「+ 新建账号」。");
           setPhase("error");
@@ -14047,6 +14549,7 @@ function ProviderPanel({
         if (!pollRes?.done) return;
         if (loginWindow && !loginWindow.closed) loginWindow.close();
         setLoginUrlForManual(null);
+        setLoginManualMode(false);
         setManualCallback(null);
         await loadAccounts();
         stopPoll();
@@ -14056,11 +14559,11 @@ function ProviderPanel({
       }
     }, 1e3);
   };
-  const toggleAccount = async (accountId, enabled) => {
+  const toggleAccount = async (accountId, enabled2) => {
     try {
-      const isLastEnabled = !enabled && disablingLeavesNoEnabledAccount(accountsRef.current, accountId, provider);
-      const isFirstEnabled = enabled && !accountsRef.current.some((a) => a.provider === provider && a.id !== accountId && a.enabled !== false);
-      await rpcCall("account.update", { accountId, patch: { enabled } });
+      const isLastEnabled = !enabled2 && disablingLeavesNoEnabledAccount(accountsRef.current, accountId, provider);
+      const isFirstEnabled = enabled2 && !accountsRef.current.some((a) => a.provider === provider && a.id !== accountId && a.enabled !== false);
+      await rpcCall("account.update", { accountId, patch: { enabled: enabled2 } });
       await loadAccounts();
       if (isLastEnabled) {
         const closeModels = confirm(
@@ -14500,7 +15003,16 @@ function ProviderPanel({
           "data-tone": "warn",
           role: "alert"
         },
-        React10.createElement("div", null, "登录窗口被浏览器拦截，请手动打开下方链接完成登录："),
+        React10.createElement(
+          "div",
+          null,
+          loginManualMode ? loginLinkCopied === false ? "已关闭「自动打开浏览器」：自动复制被浏览器拦截，请手动选中下方链接复制。" : "已关闭「自动打开浏览器」：授权链接已复制到剪贴板，请粘贴到浏览器打开并完成登录。" : "登录窗口被浏览器拦截，请手动打开下方链接完成登录："
+        ),
+        loginManualMode && (provider === "codearts" || provider === "officeace") ? React10.createElement(
+          "div",
+          null,
+          "⚠️ 该渠道建议在浏览器的无痕 / 隐私窗口中打开，否则可能复用上一个账号的登录态。"
+        ) : null,
         React10.createElement(
           "div",
           {
@@ -18045,9 +18557,23 @@ function JetHubPage({ rpcCall }) {
   const [checkinBusy, setCheckinBusy] = React10.useState(false);
   const [checkinNotice, setCheckinNotice] = React10.useState(null);
   const [showSettings, setShowSettings] = React10.useState(false);
+  const [loginAutoOpenOn, setLoginAutoOpenOnState] = React10.useState(() => loginAutoOpenEnabled());
+  const [loginAutoOpenBusy, setLoginAutoOpenBusy] = React10.useState(false);
+  const [loginAutoOpenFailed, setLoginAutoOpenFailedState] = React10.useState(
+    () => loginAutoOpenReadFailed()
+  );
+  React10.useEffect(() => {
+    const unsubscribe = subscribeLoginAutoOpen(() => {
+      setLoginAutoOpenOnState(loginAutoOpenEnabled());
+      setLoginAutoOpenFailedState(loginAutoOpenReadFailed());
+    });
+    if (typeof rpcCall === "function") void loadLoginAutoOpen(rpcCall);
+    return unsubscribe;
+  }, [rpcCall]);
   const [autoCheckin, setAutoCheckin] = React10.useState(null);
   const [autoCheckinError, setAutoCheckinError] = React10.useState("");
   const [autoCheckinBusy, setAutoCheckinBusy] = React10.useState(false);
+  const [doubaoCheckinBusy, setDoubaoCheckinBusy] = React10.useState(false);
   const [timeDraft, setTimeDraft] = React10.useState(["09:00", "21:00"]);
   const [jitterOn, setJitterOn] = React10.useState(false);
   const [jitterMinutes, setJitterMinutes] = React10.useState(10);
@@ -18344,12 +18870,12 @@ function JetHubPage({ rpcCall }) {
     setSelected(id);
     setVersion((v) => v + 1);
   };
-  const toggleProvider2 = async (providerId, enabled) => {
+  const toggleProvider2 = async (providerId, enabled2) => {
     const label = PROVIDERS.find((p) => p.id === providerId)?.label || providerId;
     if (providerToggleInFlightRef.current.has(providerId)) return;
     providerToggleInFlightRef.current.add(providerId);
     const status = providerStatuses?.[providerId];
-    if (!enabled) {
+    if (!enabled2) {
       const models = status?.models?.total ?? 0;
       const accounts = status?.accounts?.enabled ?? 0;
       const ok = confirm(
@@ -18367,11 +18893,11 @@ function JetHubPage({ rpcCall }) {
     setProviderBusy((prev) => new Set(prev).add(providerId));
     setProviderNotice(null);
     try {
-      const res = await rpcCall("provider.setEnabled", { provider: providerId, enabled });
+      const res = await rpcCall("provider.setEnabled", { provider: providerId, enabled: enabled2 });
       if (!mounted.current) return;
       setProviderNotice({
         tone: "ok",
-        text: `${label}：${summarizeProviderToggle(enabled, res)}`
+        text: `${label}：${summarizeProviderToggle(enabled2, res)}`
       });
       await loadProviderStatuses();
       if (mounted.current) setVersion((v) => v + 1);
@@ -18457,11 +18983,11 @@ function JetHubPage({ rpcCall }) {
     setShowTokenLedger(false);
     void loadAutoCheckin();
   };
-  const toggleAutoCheckin = async (enabled) => {
+  const toggleAutoCheckin = async (enabled2) => {
     setAutoCheckinBusy(true);
     setAutoCheckinError("");
     try {
-      const res = await rpcCall("usage.autoCheckin", { enabled });
+      const res = await rpcCall("usage.autoCheckin", { enabled: enabled2 });
       const next = res?.autoCheckin || null;
       setAutoCheckin(next);
       if (Array.isArray(next?.times) && next.times.length === 2) setTimeDraft([...next.times]);
@@ -18469,6 +18995,21 @@ function JetHubPage({ rpcCall }) {
       setAutoCheckinError(error?.message || "定时签到开关保存失败");
     } finally {
       setAutoCheckinBusy(false);
+    }
+  };
+  const toggleDoubaoCheckin = async (enabled2) => {
+    setDoubaoCheckinBusy(true);
+    setAutoCheckinError("");
+    try {
+      const res = await rpcCall("doubao.autoCheckin", { enabled: enabled2 });
+      const value = typeof res?.enabled === "boolean" ? res.enabled : null;
+      if (value !== null) {
+        setAutoCheckin((prev) => prev === null ? prev : { ...prev, doubaoCheckinEnabled: value });
+      }
+    } catch (error) {
+      setAutoCheckinError(error?.message || "豆包自动签到开关保存失败");
+    } finally {
+      setDoubaoCheckinBusy(false);
     }
   };
   const saveCheckinTimesWith = async (draft, jOn, jMin) => {
@@ -18776,6 +19317,51 @@ function JetHubPage({ rpcCall }) {
               }, "打开供应商开关")
             )
           ),
+          /**
+           * ①b 登录授权（2026-11-23 用户功能）。
+           *
+           * 开（默认）= 点「+ 新建账号」后自动打开授权页（= 本功能上线前的行为）；
+           * 关 = 不自动开窗，授权链接复制到剪贴板并显示在账号面板里。
+           *
+           * ⚠️ 开关文案按用户 2026-11-23 定稿的 **D 方案**：两态写进同一句
+           *    label（与「思考强度」同款长句写法），不另起一行说明「关会怎样」。
+           * ⚠️ 读 / 写失败时**不禁用**开关：一次抖动不该让用户失去「再切一次」
+           *    这条自救路径（与「渠道原生搜索」同取向）。
+           */
+          React10.createElement(
+            "div",
+            { className: "dim-jh-settingsSection" },
+            React10.createElement("div", { className: "dim-jh-settingsSectionTitle" }, "登录授权"),
+            React10.createElement(
+              "label",
+              {
+                className: loginAutoOpenFailed ? "dim-jh-settingsToggleLine dim-jh-settingsToggleLineFailed" : "dim-jh-settingsToggleLine",
+                title: loginAutoOpenFailed ? "⚠️ 开关状态读取 / 保存失败（宿主可能仍在运行旧代码）。请重试；仍不行请完全退出并重新打开 DSH。" : "开（默认）：点「+ 新建账号」后自动打开授权页。关：不自动开窗；授权链接复制到剪贴板，并显示在账号面板里（带「复制链接」按钮）。"
+              },
+              React10.createElement("input", {
+                type: "checkbox",
+                className: "dim-jh-switch",
+                checked: loginAutoOpenOn,
+                disabled: loginAutoOpenBusy,
+                onChange: (event) => void toggleLoginAutoOpen(event.target.checked)
+              }),
+              React10.createElement(
+                "span",
+                { className: "dim-jh-settingsToggleText" },
+                "新建账号时自动打开浏览器授权页；关闭则把授权链接复制到剪贴板"
+              )
+            ),
+            loginAutoOpenFailed ? React10.createElement(
+              "div",
+              { className: "dim-jh-settingsInlineFail", role: "alert" },
+              "⚠️ 开关状态读取 / 保存失败（宿主可能仍在运行旧代码）。请重试；仍不行请完全退出并重新打开 DSH。"
+            ) : null,
+            React10.createElement(
+              "p",
+              { className: "dim-jh-settingsNote" },
+              "开（默认）：点「+ 新建账号」后自动打开授权页，与现在的行为一致。关：不自动开窗；授权链接复制到剪贴板，并显示在账号面板里（带「复制链接」按钮）。"
+            )
+          ),
           // ② 定时签到
           renderCheckinSection(),
           // ②b 限流续跑（解禁后自动继续）
@@ -18990,6 +19576,21 @@ function JetHubPage({ rpcCall }) {
   React10.useEffect(() => {
     void loadReasoningDefaultStatus();
   }, [loadReasoningDefaultStatus]);
+  const toggleLoginAutoOpen = React10.useCallback(async (nextEnabled) => {
+    if (typeof rpcCall !== "function") return;
+    setLoginAutoOpenBusy(true);
+    try {
+      await setLoginAutoOpen(rpcCall, nextEnabled);
+      setLoginAutoOpenOnState(loginAutoOpenEnabled());
+      setLoginAutoOpenFailedState(false);
+    } catch (caught) {
+      console.error("[jet-hub] 切换「自动打开浏览器」失败:", caught);
+      setLoginAutoOpenOnState(loginAutoOpenEnabled());
+      setLoginAutoOpenFailedState(true);
+    } finally {
+      setLoginAutoOpenBusy(false);
+    }
+  }, [rpcCall]);
   function renderCheckinSection() {
     const a = autoCheckin;
     const busy = autoCheckinBusy;
@@ -19094,6 +19695,34 @@ function JetHubPage({ rpcCall }) {
         { className: "dim-jh-checkinHint" },
         jitterOn ? "每个时刻会在 ±" + String(jitterMinutes) + " 分钟内随机偏移（两个时刻挨得近时，幅度会被夹到间隔的一半），避免固定时刻被识别为脚本；改完关闭面板自动保存。" : "固定时刻执行；改完关闭面板自动保存。"
       ),
+      // ★ 豆包自动签到开关（2026-11-22 用户需求：「面板里面加个豆包自动签到的开关」）。
+      //
+      // ⚠️ 只在宿主给出**生效值**时才渲染（`typeof === 'boolean'`）：旧宿主
+      // （插件已热替换、进程还是旧代码）没有这个字段，渲染出来只会是一个永远
+      // 勾不上/关不掉的假开关；不渲染比渲染错的好排查。
+      // ⚠️ 勾选态**照抄宿主**（三态的结果值已在宿主算好），客户端不重算 registry 默认。
+      typeof a?.doubaoCheckinEnabled === "boolean" ? React10.createElement(
+        "div",
+        { className: "dim-jh-checkinRow" },
+        React10.createElement(
+          "label",
+          { className: "dim-jh-checkinToggle" },
+          React10.createElement("input", {
+            type: "checkbox",
+            className: "dim-jh-switch",
+            checked: a.doubaoCheckinEnabled,
+            // 只在这一个开关的写请求在飞时禁用（不拖累整个面板）
+            disabled: doubaoCheckinBusy,
+            onChange: (event) => void toggleDoubaoCheckin(event.target.checked)
+          }),
+          React10.createElement("span", null, "豆包自动签到")
+        ),
+        React10.createElement(
+          "span",
+          { className: "dim-jh-checkinHint" },
+          "关掉后豆包不参与每天两次的自动签到；仍可在账号卡片上手动点「一键领取积分」。"
+        )
+      ) : null,
       renderCheckinStatus(a),
       autoCheckinError === "" ? null : React10.createElement("div", { className: "dim-jh-checkinHint", role: "alert", style: { color: "var(--dsw-alias-state-error-primary, #d93025)" } }, autoCheckinError)
     );
@@ -20550,6 +21179,7 @@ function UsageBadgeActive(props) {
   const [preference, setPreference] = React11.useState(null);
   const [prefError, setPrefError] = React11.useState("");
   const [rotationState, setRotationState] = React11.useState(null);
+  const [modelInfo, setModelInfo] = React11.useState(null);
   const [strictManualOrder, setStrictManualOrder] = React11.useState(false);
   const [rotationError, setRotationError] = React11.useState("");
   const [rotationBusy, setRotationBusy] = React11.useState(false);
@@ -20935,9 +21565,24 @@ function UsageBadgeActive(props) {
     }, "默认") : React11.createElement("span", {
       key: "pos",
       className: "dim-jh-badgeCount",
-      title: `当前轮换起点：位次 ${rotationState.selectedPosition}`,
+      /**
+       * ★ **带账号名**（2026-11-24 用户选的「方案 B」）。
+       *
+       * 用户原话：「我想要子代理对话页面，达到跟主代理对话页面一样的效果，
+       * 从页面就能看出这个对话是跟哪个帐号在进行的」
+       *
+       * ⇒ `位次 3 · 陈水广`（有名字时）／`位次 3`（取不到名字时）。
+       *
+       * ⚠️ 名字来自服务端 `selectedAccountName`（那里才跑
+       * `enrichAccountIdentity()` 补全链路），客户端**不自己 find**
+       * —— 本仓红线：同一语义两处实现必然漂移。
+       *
+       * ⚠️ 取不到名字时**只显示位次**（与改动前逐字相同），不显示
+       * 「位次 3 · 未知」之类的噪音。
+       */
+      title: rotationState.selectedAccountName === null || rotationState.selectedAccountName === void 0 ? `当前轮换起点：位次 ${rotationState.selectedPosition}` : `当前轮换起点：位次 ${rotationState.selectedPosition} · ${rotationState.selectedAccountName}`,
       "aria-hidden": "true"
-    }, `位次 ${rotationState.selectedPosition}`),
+    }, rotationState.selectedAccountName === null || rotationState.selectedAccountName === void 0 ? `位次 ${rotationState.selectedPosition}` : `位次 ${rotationState.selectedPosition} · ${rotationState.selectedAccountName}`),
     view.accountCount > 0 ? React11.createElement("span", {
       key: "cnt",
       className: "dim-jh-badgeCount",
@@ -20945,6 +21590,24 @@ function UsageBadgeActive(props) {
       "aria-hidden": "true"
     }, `· 共 ${view.accountCount} 帐号`) : null
   ]);
+  const isSubagentBadge = rotationState !== null && rotationState.selectedAccountName !== null;
+  const modelPill = isSubagentBadge && modelInfo !== null ? React11.createElement("span", {
+    key: "model",
+    className: "dim-jh-badgeModelPill",
+    title: modelInfo.effort === null ? `子代理当前模型：${modelInfo.model}` : `子代理当前模型：${modelInfo.model}（思考强度 ${modelInfo.effort}）`,
+    "aria-hidden": "true"
+  }, [
+    React11.createElement(
+      "span",
+      { key: "m", className: "dim-jh-badgeModelName" },
+      /**
+       * ⚠️ **优先用服务端下发的 `modelName`**（与档次窗口下拉框同源）；
+       * 取不到才回落 id —— 至少有信息，不空白。
+       */
+      rotationState?.modelName ?? modelInfo.model
+    ),
+    modelInfo.effort === null ? null : React11.createElement("span", { key: "e", className: "dim-jh-badgeModelEffort" }, modelInfo.effort)
+  ]) : null;
   return React11.createElement("div", { className: "dim-jh-badge", ref: root }, [
     React11.createElement("button", {
       key: "btn",
@@ -20958,7 +21621,8 @@ function UsageBadgeActive(props) {
       React11.createElement("span", { key: "dot", className: "dim-jh-badgeDot", "data-tone": tone }),
       collapsed
     ]),
-    open ? renderPopover() : null
+    open ? renderPopover() : null,
+    modelPill
   ]);
   function renderPopover() {
     const stamp = snapshot === null ? "" : formatUpdatedAt(value?.generatedAt ?? snapshot.at);
@@ -21155,13 +21819,21 @@ function UsageBadgeActive(props) {
     }
     try {
       let currentModel;
+      let capturedModelInfo = null;
       try {
         const directory = typeof props.resolveDirectory === "function" ? props.resolveDirectory() : void 0;
         const current = directory?.store?.getSnapshot?.()?.current;
         currentModel = typeof current?.model === "string" ? current.model : void 0;
+        if (typeof current?.model === "string" && current.model.length > 0) {
+          capturedModelInfo = {
+            model: current.model,
+            effort: typeof current?.reasoningEffort === "string" && current.reasoningEffort.length > 0 ? current.reasoningEffort : null
+          };
+        }
       } catch {
         currentModel = void 0;
       }
+      setModelInfo(capturedModelInfo);
       const res = await Promise.race([
         readRotation(provider, sessionId, currentModel),
         new Promise((_, reject) => {
@@ -21173,6 +21845,30 @@ function UsageBadgeActive(props) {
         selected: typeof value2?.selected === "string" ? value2.selected : null,
         // ⚠️ 位次才是下拉框的 value（用户 2026-11-10 要求「跟随位次」）
         selectedPosition: typeof value2?.selectedPosition === "number" ? value2.selectedPosition : null,
+        /**
+         * ★ **选中账号的显示名**（2026-11-24 方案 B）。
+         *
+         * 服务端只在「取得到名字」时下发；`null` = 取不到 ⇒ 胶囊只显示位次。
+         * ⚠️ 用 `null` 而不是 `undefined` 作内部表示：`undefined` 会与
+         * 「本次 RPC 还没返回」混淆，而胶囊的渲染判据需要区分这两者
+         *（虽然当前两者渲染相同，但将来加 loading 态时不能混）。
+         */
+        selectedAccountName: typeof value2?.selectedAccountName === "string" && value2.selectedAccountName.length > 0 ? value2.selectedAccountName : null,
+        /**
+         * ★★★ **当前模型的显示名**（2026-11-24 用户要求）。
+         *
+         * ## 用户原话
+         *
+         * > 「模型名字要跟主代理的模型列表一模一样，
+         * >   也就是跟档次窗口模型下拉框的一模一样呀」
+         *
+         * 服务端 `account.getRotation` 用**同一个取数路径**（`ctx.llm.listModels`）
+         * 取到 `m.name`，与档次窗口下拉框**逐字同源**。
+         *
+         * ⚠️ `null` = 服务端没给（目录里没这个模型 / 目录未就绪）
+         *   ⇒ 胶囊**回落显示 id**（至少有信息，不空白）。
+         */
+        modelName: typeof value2?.modelName === "string" && value2.modelName.length > 0 ? value2.modelName : null,
         stale: value2?.stale === true,
         locked: value2?.locked === true,
         /**
@@ -22060,14 +22756,14 @@ var JET_HUB_SIDEBAR_ORDER = 20;
 var PANEL_ENTRY_READ_TIMEOUT_MS = 5e3;
 var PANEL_ENTRY_READ_ATTEMPTS = 3;
 var PANEL_ENTRY_RETRY_DELAY_MS = 200;
-function delay(ms) {
+function delay2(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 var entry = null;
-var readFailed = false;
-var inflight = null;
-var writeSeq = 0;
-var listeners = /* @__PURE__ */ new Set();
+var readFailed2 = false;
+var inflight2 = null;
+var writeSeq2 = 0;
+var listeners2 = /* @__PURE__ */ new Set();
 function normalize(raw) {
   return typeof raw === "string" && VALID_ENTRIES.includes(raw) ? raw : null;
 }
@@ -22081,19 +22777,19 @@ function panelEntryShowsSettings() {
   return entry === "settings";
 }
 function panelEntryReadFailed() {
-  return readFailed;
+  return readFailed2;
 }
 function subscribePanelEntry(listener) {
-  listeners.add(listener);
+  listeners2.add(listener);
   return () => {
-    listeners.delete(listener);
+    listeners2.delete(listener);
   };
 }
-function publish(nextEntry, nextFailed) {
-  if (entry === nextEntry && readFailed === nextFailed) return;
+function publish2(nextEntry, nextFailed) {
+  if (entry === nextEntry && readFailed2 === nextFailed) return;
   entry = nextEntry;
-  readFailed = nextFailed;
-  for (const listener of [...listeners]) {
+  readFailed2 = nextFailed;
+  for (const listener of [...listeners2]) {
     try {
       listener();
     } catch (caught) {
@@ -22101,7 +22797,7 @@ function publish(nextEntry, nextFailed) {
     }
   }
 }
-function readSignal() {
+function readSignal2() {
   if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
     return AbortSignal.timeout(PANEL_ENTRY_READ_TIMEOUT_MS);
   }
@@ -22115,39 +22811,39 @@ function readSignal() {
   return controller.signal;
 }
 function loadPanelEntry(rpcCall) {
-  if (inflight !== null) return inflight;
-  const seqAtStart = writeSeq;
+  if (inflight2 !== null) return inflight2;
+  const seqAtStart = writeSeq2;
   const task = (async () => {
     let lastError;
     for (let attempt = 1; attempt <= PANEL_ENTRY_READ_ATTEMPTS; attempt += 1) {
       try {
-        const result = await rpcCall("panelEntry.get", {}, readSignal());
-        if (writeSeq !== seqAtStart) return entry ?? FALLBACK_ENTRY;
+        const result = await rpcCall("panelEntry.get", {}, readSignal2());
+        if (writeSeq2 !== seqAtStart) return entry ?? FALLBACK_ENTRY;
         const next = normalize(result?.entry);
         if (next !== null) {
-          publish(next, false);
+          publish2(next, false);
         } else {
-          publish(entry ?? FALLBACK_ENTRY, true);
+          publish2(entry ?? FALLBACK_ENTRY, true);
         }
         return entry ?? FALLBACK_ENTRY;
       } catch (caught) {
         lastError = caught;
-        if (writeSeq !== seqAtStart) return entry ?? FALLBACK_ENTRY;
+        if (writeSeq2 !== seqAtStart) return entry ?? FALLBACK_ENTRY;
         if (attempt >= PANEL_ENTRY_READ_ATTEMPTS) break;
-        await delay(PANEL_ENTRY_RETRY_DELAY_MS * attempt);
-        if (writeSeq !== seqAtStart) return entry ?? FALLBACK_ENTRY;
+        await delay2(PANEL_ENTRY_RETRY_DELAY_MS * attempt);
+        if (writeSeq2 !== seqAtStart) return entry ?? FALLBACK_ENTRY;
       }
     }
     console.warn(
       `[jet-hub] 读取面板入口偏好失败，按仅侧栏处理（已重试 ${PANEL_ENTRY_READ_ATTEMPTS - 1} 次）`,
       lastError
     );
-    if (writeSeq === seqAtStart) publish(entry ?? FALLBACK_ENTRY, true);
+    if (writeSeq2 === seqAtStart) publish2(entry ?? FALLBACK_ENTRY, true);
     return entry ?? FALLBACK_ENTRY;
   })();
-  inflight = task;
+  inflight2 = task;
   const clear = () => {
-    if (inflight === task) inflight = null;
+    if (inflight2 === task) inflight2 = null;
   };
   void task.then(clear, clear);
   return task;
@@ -22158,8 +22854,8 @@ async function setPanelEntry(rpcCall, next) {
   if (confirmed === null) {
     throw new Error("面板入口偏好没有返回合法 entry");
   }
-  writeSeq += 1;
-  publish(confirmed, false);
+  writeSeq2 += 1;
+  publish2(confirmed, false);
   return confirmed;
 }
 
@@ -22363,7 +23059,7 @@ function JetHubPanelEntryCard({ rpcCall }) {
   const [entry2, setEntry] = React15.useState(currentEntry);
   const [open, setOpen] = React15.useState(false);
   const [busy, setBusy] = React15.useState(false);
-  const [readFailed2, setReadFailed] = React15.useState(() => panelEntryReadFailed());
+  const [readFailed3, setReadFailed] = React15.useState(() => panelEntryReadFailed());
   const [writeFailed, setWriteFailed] = React15.useState(false);
   const busyRef = React15.useRef(false);
   React15.useEffect(() => subscribePanelEntry(() => {
@@ -22409,7 +23105,7 @@ function JetHubPanelEntryCard({ rpcCall }) {
           "div",
           { className: "dim-jh-cardDesc" },
           // 两种失败各有各的说法：读失败说「读到的是默认值」，写失败说「刚才那次没存上」。
-          writeFailed ? CARD_DESC_WRITE_FAILED : readFailed2 ? CARD_DESC_READ_FAILED : CARD_DESC
+          writeFailed ? CARD_DESC_WRITE_FAILED : readFailed3 ? CARD_DESC_READ_FAILED : CARD_DESC
         )
       ),
       React15.createElement(import_dsh_client_ui_primitives.Menu, {
@@ -22645,10 +23341,10 @@ var candidatesSnapshot = null;
 var candidatesAt = 0;
 var candidatesInflight = null;
 var boundRpcCall = null;
-var listeners2 = /* @__PURE__ */ new Set();
+var listeners3 = /* @__PURE__ */ new Set();
 var tickTimer = null;
 function notify() {
-  for (const fn of [...listeners2]) {
+  for (const fn of [...listeners3]) {
     try {
       fn();
     } catch {
@@ -22656,7 +23352,7 @@ function notify() {
   }
 }
 function subscribeTick(listener) {
-  listeners2.add(listener);
+  listeners3.add(listener);
   if (tickTimer === null) {
     tickTimer = setInterval(() => {
       if (boundRpcCall !== null) void loadCandidates(boundRpcCall);
@@ -22665,8 +23361,8 @@ function subscribeTick(listener) {
     if (typeof tickTimer.unref === "function") tickTimer.unref();
   }
   return () => {
-    listeners2.delete(listener);
-    if (listeners2.size === 0 && tickTimer !== null) {
+    listeners3.delete(listener);
+    if (listeners3.size === 0 && tickTimer !== null) {
       clearInterval(tickTimer);
       tickTimer = null;
     }
@@ -22912,7 +23608,7 @@ function apply(ctx) {
       //    ⚠️ 端点本身仍在（`aggregate.expiryOrder`）—— 删的只是这个没人用的转发 prop。
       writePreference: (preference) => rpcCall("usage.badgePreference", { preference }),
       // 自动签到开关（全局一个，不分渠道）：宿主在「打开」时会立刻跑一轮。
-      setAutoCheckin: (enabled) => rpcCall("usage.autoCheckin", { enabled }),
+      setAutoCheckin: (enabled2) => rpcCall("usage.autoCheckin", { enabled: enabled2 }),
       // 关闭那行**常驻**的自动签到状态文字（只关当前这一轮，下一轮会重新出现）。
       dismissAutoCheckin: () => rpcCall("usage.autoCheckin", { dismiss: true }),
       // 一键领取：每日签到 + （buddy / workbuddy 的）成长中心任务。

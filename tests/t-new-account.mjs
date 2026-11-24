@@ -1101,7 +1101,11 @@ console.log('\noauth 方法形状：')
     //    两个路由组是**有意不接**的，放行它们，但放行名单必须写死在这里，
     //    否则将来真漏一家也会被当成路由组悄悄放过。
     const SKIP_ROUTE_GROUPS = new Set(['aggregate', 'jet-hub-auto'])
-    const missing = keys.filter((k) => !pluginSet.has(k) && !SKIP_ROUTE_GROUPS.has(k))
+    // doubao：上游 2026-11-24（a1bd112）落地网页端私有协议适配器，本仓尚未接入 ——
+    // 接入是**功能新增**（icons / NAMES / FALLBACK / 快照 / 扫码登录链路都要跟），
+    // 放行到下一轮，接入后必须删掉这一条。
+    const PENDING_PROVIDERS = new Set(['doubao'])
+    const missing = keys.filter((k) => !pluginSet.has(k) && !SKIP_ROUTE_GROUPS.has(k) && !PENDING_PROVIDERS.has(k))
     ok(missing.length === 0, `vendor 里这些 provider 插件没接：${missing.join(', ') || '无'}`)
     ok(
       keys.filter((k) => SKIP_ROUTE_GROUPS.has(k)).length === 2,

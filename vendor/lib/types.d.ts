@@ -2199,6 +2199,28 @@ export interface RpcReasoningDefaultSetEnabledRequest {
 export interface RpcReasoningDefaultSetEnabledResponse {
     enabled: boolean;
 }
+/**
+ * RPC: 「新建账号时自动打开浏览器授权页」开关的读取响应（2026-11-23）。
+ *
+ * 开（默认）= 点「+ 新建账号」后宿主 / 客户端自动打开授权页；
+ * 关 = 不自动开窗，把授权链接复制到剪贴板并显示在账号面板里。
+ */
+export interface RpcLoginPreferencesGetEnabledResponse {
+    enabled: boolean;
+}
+/** RPC: 「新建账号时自动打开浏览器授权页」开关写入请求。 */
+export interface RpcLoginPreferencesSetEnabledRequest {
+    enabled: boolean;
+}
+/**
+ * RPC: 「新建账号时自动打开浏览器授权页」开关写入响应。
+ *
+ * ⚠️ 回传的是**落盘后重读的值**，不是请求里的值 —— 与 `gateway.setEnabled`
+ * 同取向：客户端一律以后端回传为准，不做乐观更新。
+ */
+export interface RpcLoginPreferencesSetEnabledResponse {
+    enabled: boolean;
+}
 /** RPC: 「渠道原生搜索」开关的读取响应。 */
 export interface RpcNativeSearchGetEnabledResponse {
     /** `true` = 支持原生搜索的渠道走自己后端的搜索接口；`false` = 全部回官方搜索。 */
@@ -2337,10 +2359,80 @@ export interface RpcCreditWindowResponse {
  * ⚠️ 只传一个字段时，另一个**保持原值**（不是清空）—— 弹窗总是两个都传，
  * 但允许「只清一项」的调用方。
  */
+/**
+ * ★ RPC: 档次窗口用的「可选模型 + 思考强度」清单（2026-11-23）。
+ *
+ * ## 为什么单独开一个端点
+ *
+ * `model.list` 的返回形状是「设置页的完整目录」，不含 `efforts`；
+ * 而档次窗口只需要「**已启用**的模型 + 它们的思考档位」这一小块。
+ *
+ * ⚠️ 不复用 `model.list`：那会让设置页的响应跟着膨胀（它已有 20+ 字段），
+ * 且「已启用」这条过滤与设置页的「全部 + 禁用标记」语义不同。
+ */
+export interface RpcCreditWindowModelsRequest {
+    provider: string;
+}
+/**
+ * 一个可选模型。
+ */
+export interface RpcCreditWindowModelEntry {
+    /** 模型 id（写进 `subagent.model` 的值）。 */
+    id: string;
+    /** 展示名（列表里显示的文字，含计费倍率后缀）。 */
+    name: string;
+    /**
+     * 该模型的思考档位（弱 → 强）。
+     *
+     * ⚠️ 空数组 = 该模型**不支持**思考 ⇒ UI 不渲染强度下拉。
+     */
+    efforts: ReadonlyArray<{
+        id: string;
+        name: string;
+    }>;
+    /** 默认档位（渠道或上游给的）。`undefined` = 没有默认，UI 取 `efforts` 的**最后一档**（最强）。 */
+    defaultEffort?: string;
+}
+/** RPC: 档次窗口可选模型清单响应。 */
+export interface RpcCreditWindowModelsResponse {
+    models: RpcCreditWindowModelEntry[];
+    /**
+     * 该渠道设置里的「默认最高档」策略是否开启。
+     *
+     * ⚠️ `true` ⇒ UI 的强度下拉默认选 `efforts` 的**最后一档**；
+     * `false` ⇒ 用模型自己的 `defaultEffort`。
+     */
+    preferHighestEffort?: boolean;
+}
 export interface RpcCreditWindowSetRequest {
     provider: string;
     windowDays?: number;
     imminentDays?: number;
+    /**
+     * ★ 子代理专属设置（2026-11-23）。
+     *
+     * `undefined` = **不动**它（合并语义）；传 `null` = **清除**它。
+     * ⚠️ 与 `windowDays` / `imminentDays` 的「undefined = 不动」一致 ——
+     * 用户在「子代理」那块点保存，不该顺带把窗口天数重置。
+     */
+    subagent?: RpcSubagentRotationSetting | null;
+}
+/**
+ * ★ 子代理设置的 RPC 形状（2026-11-23）。
+ *
+ * ⚠️ 与 `SubagentRotationSetting` **字段一致但不复用同一个类型**：
+ * RPC 层要能表达「非法值」以便端点做**严格校验**并回 `bad-request`
+ *（用户 2026-11-23 的要求：非法值不得静默丢弃）。
+ */
+export interface RpcSubagentRotationSetting {
+    /** 起点策略：`follow` / `sequence` / `reverse` / `hash` / `fixed`。 */
+    startMode?: string;
+    /** `fixed` 模式的账号位次（1-based）。 */
+    fixedPosition?: number;
+    /** 子代理模型 id（本 provider 内）。 */
+    model?: string;
+    /** 思考强度 id（模型声明的渐之一）。 */
+    reasoningEffort?: string;
 }
 /**
  * RPC: 「面板入口」的读取响应（插件详情页设置卡片里的下拉）。
@@ -2942,6 +3034,18 @@ export interface RpcUsageAutoCheckinState {
      *（否则用户关过一次就再也看不到新结果了）。
      */
     dismissed: boolean;
+    /**
+     * ★ 豆包「自动签到」开关的**生效值**（2026-11-22 用户需求：「面板里面加个
+     * 豆包自动签到的开关」）。
+     *
+     * 语义是**三态**的结果值：`AutoCheckinDoc.doubaoEnabled` 有值时以用户的表态
+     * 为准，缺席则跟随 registry 的 `autoCheckinExcluded`（见 `doubaoCheckinEnabled()`）。
+     * 客户端直接照它渲染勾选态，**不要自己再算一遍默认值**。
+     *
+     * ⚠️ 宿主是**旧代码**时本字段缺席：客户端必须按「不渲染这个开关」处理，
+     * 不能当成 `false` —— 那会让用户看到「开关关着」、而豆包其实在自动跑。
+     */
+    doubaoCheckinEnabled: boolean;
 }
 /**
  * RPC: 读写「每日首次启动自动签到」开关，以及关闭常驻状态文字。

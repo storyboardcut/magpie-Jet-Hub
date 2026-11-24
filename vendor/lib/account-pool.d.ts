@@ -2,7 +2,8 @@ import { Context } from '@deepseek-ai/cordis';
 import type { BuddyCredential } from './buddy.js';
 import type { BuddyProduct } from './product.js';
 import type { AggregateAllowedMap, AggregateOrderMap, AggregateOrderMode, AggregateRejectionMap, JetHubState, ModelDisableMap, PanelEntry, PermanentLockMap } from './jet-hub-store.js';
-import type { CreditWindowSetting, RotationStartTier } from './jet-hub-store.js';
+import type { CreditWindowSetting, RotationStartTier, SubagentRotationSetting } from './jet-hub-store.js';
+import type { SubagentAssignment, SubagentAssignmentMap } from './subagent-rotation.js';
 import { type QoderTrafficProvider } from './qoder-traffic-guard.js';
 import type { CodeArtsCredential, ProviderAccountEntry, ProviderAccountStatus } from './types.js';
 export { JET_HUB_NS } from './jet-hub-store.js';
@@ -323,6 +324,13 @@ export declare class AccountPool {
      * 消费者（`resolveCreditWindow`）每次都问本表，不允许把值存进构造期字段。
      */
     private creditWindowCache;
+    /**
+     * 子代理分配表（provider → sessionId → 分配）。
+     *
+     * ⚠️ **必须持久化**：插件重启后收不到已发过的 `subagent/start`，
+     * 若不落盘，正在跑的子代理会退化成「用主代理起点」。
+     */
+    private subagentAssignmentCache;
     private preferredRotationCache;
     /**
      * 「面板入口」的进程内副本：Jet Hub 的唯一入口位置（两个取值互斥）。
@@ -778,6 +786,84 @@ export declare class AccountPool {
      *    （与 `setPermanentLocked` 同取向）。
      */
     setCreditWindow(provider: string, setting: CreditWindowSetting | undefined): Promise<void>;
+    /**
+     * ★★★ **取某 provider 的子代理设置**（2026-11-23）。
+     *
+     * ⚠️ 每次现读，不缓存（与 `preferredRotationFor` 同款）：用户随时可能在面板上改。
+     *
+     * @returns `undefined` = 没配子代理设置 ⇒ 调用方走主代理逻辑（与加本功能之前逐字节相同）
+     */
+    subagentRotationFor(provider: string): SubagentRotationSetting | undefined;
+    /**
+     * 写子代理设置（`undefined` = 清除）。
+     *
+     * ⚠️ **合并语义**：只传 `subagent` 时**不动** `windowDays` / `imminentDays`。
+     * 这是刻意的 —— 用户在「子代理」那块点保存，不该顺带把窗口天数重置。
+     */
+    setSubagentRotation(provider: string, setting: SubagentRotationSetting | undefined): Promise<void>;
+    /**
+     * ★★★ **按 sessionId 反查它属于哪个 provider**（2026-11-24）。
+     *
+     * ## 为什么需要
+     *
+     * `subagent/end` 事件的 payload **只有 `id`**（子代理会话 id），
+     * **没有 provider** —— 而 `recordSubagentEnd(provider, sessionId)` 需要它。
+     *
+     * 分配表的结构是「provider → sessionId → 记录」⇒ 反查要遍历 provider 键。
+     *
+     * ## ⚠️ 为什么允许遍历
+     *
+     * provider 数量是**个位数**（本机 10 家左右），而分配表每个 provider 至多
+     * 128 条 ⇒ 最坏 1280 次键查找，且只在 `subagent/end` 时跑一次
+     * （子代理结束时），不在热路径上。
+     *
+     * @returns 找到的 provider 列表（**理论上 1 个**，但同一 sessionId
+     *   在多家各有一条记录时会是多个 —— 那种情况全部标记，不漏）
+     */
+    providersOfSubagentSession(sessionId: string): string[];
+    /** 取某 provider 的子代理分配表（**只读快照**）。 */
+    subagentAssignmentsFor(provider: string): Readonly<SubagentAssignmentMap>;
+    /** 取单个子代理的分配（热路径：每次 `resolveCredential` 都会问）。 */
+    subagentAssignmentOf(provider: string, sessionId: string | undefined): SubagentAssignment | undefined;
+    /**
+     * 记录一个子代理分配（`subagent/start` 时调）。
+     *
+     * @returns 实际分配的 slot（幂等：已存在则返回原 slot）
+     */
+    recordSubagentStart(provider: string, sessionId: string, parentSessionId: string, now: number): Promise<number>;
+    /** 标记子代理结束（`subagent/end` 时调）。**不清除记录**（见 `markSubagentEnded` 的注释）。 */
+    recordSubagentEnd(provider: string, sessionId: string): Promise<void>;
+    /**
+     * ★★★ **钉住某子代理的账号**（2026-11-24 用户要求：拉起时定死）。
+     *
+     * ## 为什么要钉
+     *
+     * > 「我是希望『拉起时定死，只有该号不可用才换』，
+     * >   这样可以保证子代理的缓存命中率高，如果频繁换帐号，缓存命中率就低了。」
+     *
+     * 原理：prompt cache 按（账号 + 模型 + 前缀）命中 ⇒ 换号即缓存全失效。
+     *
+     * ⚠️ **同步更新缓存**（与 `recordSubagentStart` 同纪律）：调用方紧接着
+     * 还要读它，不能等落盘。
+     *
+     * @returns `true` = 有新值（同值返回 `false`，调用方据此跳过重复写盘）
+     */
+    pinSubagentAccount(provider: string, sessionId: string, accountId: string): Promise<boolean>;
+    /**
+     * ★★★ **记录用户手动选的账号**（2026-11-24 用户定 B 方案）。
+     *
+     * 语义：用户在该子代理对话页面手动选起点时，写这个字段；
+     * 它的优先级**高于** `pinnedAccountId`（见 `credential-resolver.ts`）。
+     *
+     * ⚠️ 主代理没有分配记录 ⇒ `setUserPickedAccount` 原样返回 ⇒ 无副作用。
+     *
+     * ⚠️ **同步更新缓存**（与 `pinSubagentAccount` 同纪律）：调用方紧接着
+     * 还要读它（回传 `selected`），不能等落盘。
+     *
+     * @param accountId - `undefined` = 清除手动选择（回落到 pin）
+     * @returns `true` = 有新值（同值返回 `false`，调用方据此跳过重复写盘）
+     */
+    setUserPickedAccount(provider: string, sessionId: string, accountId: string | undefined): Promise<boolean>;
     /**
      * ★ **轮换起点选定那一刻的档位**（S6，2026-11-20）。
      *

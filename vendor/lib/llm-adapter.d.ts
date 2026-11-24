@@ -138,6 +138,50 @@ export declare const CODEARTS_REASONING_EFFORTS: readonly {
  * 与 `trae-adapter.ts` 是既有问题，本次只修这一处新增注释）。
  */
 export declare const CODEARTS_DEFAULT_EFFORT = "on";
+/**
+ * 该模型的**声明档位表**（强度序：弱 → 强）。
+ *
+ * ## ⚠️⚠️ 必须保留 `off` / `on` 两个旧 id（issue #145 第 1 条注意事项）
+ *
+ * `dsh-agent-default-model` 把 `reasoningEffort` **持久化在 Config 里**、会话 header
+ * 也会存。而 `dsh-llm` 的 `resolveCallWithInfo()` 对**显式请求的档位严格校验**：
+ * 不在声明列表里就抛 `UNSUPPORTED_REASONING_EFFORT` —— 那是**整轮对话直接失败**，
+ * 不是降级。**删掉这两个 id 会打死所有存过它们的用户。**
+ *
+ * ⇒ 保留成**别名**：`off` = 最弱（按 `shutBy` 尽量真关），`on` = 最强（`max`）。
+ *   位置仍是强度序 ⇒ `off` 在最左、`on` 在最右。
+ *
+ * ⚠️ **`on` 落在最右**还有一层作用：`dsh-agent-default-model` 的
+ * `strongestDeclaredEffort` 会取「声明里最强的那一档」⇒ 默认自动落到 `max`。
+ *   这也是为什么本修复**不需要**单独调 `CODEARTS_DEFAULT_EFFORT`。
+ *
+ * ⚠️ **未登记的模型（`kimi-*` / `openpangu-*` / 手填 id）保持原来的两档** ——
+ *   它们**不校验** `reasoning_effort`，任何枚举都是推测；宁可不给，也不编。
+ */
+export declare function codeartsEffortsFor(modelId: string): readonly {
+    id: ReturnType<typeof ReasoningEffortId>;
+    name: string;
+}[];
+/**
+ * 出站时该模型**实际要发的思考字段**（issue #145 的修法核心）。
+ *
+ * ## 判据（三个分支，**两个字段只发一个，绝不并**）
+ *
+ * | 用户选的 | `shutBy` | 发什么 |
+ * |---|---|---|
+ * | `off` | `enable_thinking_false` | `enable_thinking: false` |
+ * | `off` | `reasoning_effort_none` | `reasoning_effort: 'none'` |
+ * | `off` | `cannot_shut` | `reasoning_effort: <最弱档>`（**如实降级**）|
+ * | 其他档 / `on` | — | `reasoning_effort: <该档>`（`on` ⇒ 最强）|
+ *
+ * ⚠️⚠️ **绝不并发两个字段**：`reasoning_effort: 'max'` + `enable_thinking: true`
+ * 谁赢**上游没定义**，那会让「档位不生效」变成更难查的问题（issue 第 3 条）。
+ *
+ * ⚠️ **不再发 `enable_thinking: true`**：作者实测它是**削弱开关**而不是开启开关 ——
+ * `glm-5.3` 用 `true` 是 **37** reasoning_tokens，而**不发该字段是 239**（比值 0.15）；
+ * `GLM-5.2` 是 470 vs 685。旧的 `on` 档因此**削弱**了思考。
+ */
+export declare function codeartsThinkingFields(modelId: string, requestedEffort: string | undefined): Record<string, unknown>;
 /** 该模型在本进程内是否已被「补头成功」证明过要带 `maas_type: benefit`。 */
 export declare function codeArtsBenefitLearnedFor(model: string): boolean;
 /** 记下「该模型补头后成功」；只由成功路径调用。 */
