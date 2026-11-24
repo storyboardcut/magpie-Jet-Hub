@@ -182,10 +182,12 @@ export class JetHubContainer {
   credentialTextOf(provider) {
     let accounts
     try {
-      // 容器还没起来时 `seam` / `pool` 不存在 —— 工具侧拿到 undefined 会报可读错误。
-      accounts = this.seam?.pool?.readAccounts?.() ?? []
+      // 容器还没起来时 `seam` / `pool` 不存在 —— 工具调用**不经过** `start()`，
+      // 所以这里必须有兜底：直接读 DSH 的账号池文件（2026-11-24 真机实测：
+      // 只走 `seam.pool` 时工具一律报「还没有可用账号」，而界面显示已登录）。
+      accounts = this.seam?.pool?.readAccounts?.() ?? this._readAccountsFromState()
     } catch {
-      return undefined
+      accounts = this._readAccountsFromState()
     }
     const hit = accounts.find((a) => a?.provider === provider && a?.enabled !== false)
     if (hit === undefined) return undefined
@@ -198,6 +200,28 @@ export class JetHubContainer {
     const refs = parseRefs(text)
     const raw = refs.get(hit.credentialRef)
     return raw === undefined || raw === '' ? undefined : raw
+  }
+
+  /**
+   * 不启动容器时读账号池：`<dshHome>/jet-hub/state.json` 的 `accounts`。
+   *
+   * 与本体 `account-pool.js` 读的是同一个文件、同一份结构（数组，或按 provider
+   * 分组的对象）。解析失败一律返回空数组 —— 工具侧会转成可读错误，而不是崩。
+   *
+   * @returns {Array<{id?: string, provider?: string, credentialRef?: string, enabled?: boolean}>}
+   */
+  _readAccountsFromState() {
+    try {
+      const file = join(this.dshHome ?? '', 'jet-hub', 'state.json')
+      const raw = readFileSync(file, 'utf8')
+      const json = JSON.parse(raw)
+      const acc = json?.accounts ?? json
+      if (Array.isArray(acc)) return acc
+      if (acc && typeof acc === 'object') return Object.values(acc).flat()
+      return []
+    } catch {
+      return []
+    }
   }
 
   /**
