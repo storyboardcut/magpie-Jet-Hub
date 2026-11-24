@@ -2852,7 +2852,7 @@ export function makePlugin(dshProvider) {
           return got.access
         })
         return {
-          models: toMagpieMediaModels(mediaConfigModels()),
+          models: toMagpieMediaModels(mediaConfigModels(), SITES[siteId]),
           fetch: (url, init) => handleMediaFetch(url, init ?? {}, { request: transport, siteId }),
           // 上游签名是 `createSearchHook(site, post)`，`site` 收的是站点对象。
           search: createSearchHook(SITES[siteId], transport),
@@ -3605,7 +3605,11 @@ export function makePlugin(dshProvider) {
       provider: {
         id,
         async models(provider) {
-          return currentModels(provider)
+          const chat = currentModels(provider)
+          // ⚠️ 媒体模型必须在这里也合并一次：magpie 运行时优先用 `provider.models()`
+          // 的返回（整体替换 config 里那份），只在 config 里加的话界面上看不到
+          // 「MiniMax-H3 / H3-Max」（2026-11-24 实测：config 里 6 个、界面只 4 个）。
+          return mediaOf === undefined ? chat : { ...chat, ...mediaOf.models }
         },
       },
 

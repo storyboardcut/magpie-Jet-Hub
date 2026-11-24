@@ -133,12 +133,28 @@ export function isMinimaxProvider(dshProvider) {
  *
  * @param {Record<string, object>} models `mediaConfigModels()` 的产物
  */
-export function toMagpieMediaModels(models) {
+export function toMagpieMediaModels(models, site) {
   const out = {}
   for (const [id, m] of Object.entries(models)) {
     const isImage = Array.isArray(m?.modalities?.output) && m.modalities.output.includes('image')
+    // ⚠️ 解构掉 `cost`（上游给了全 0 的 `emptyCost`）。**不发 cost 字段**：
+    // magpie 的判据是 `Cost == nil || (Input <= 0 && Output <= 0)`，发一个全 0
+    // 的对象等于「确认免费」，会把「不知道」说成 0。图像/视频按次计费、不是
+    // 按 token，本来就没有 token 单价 —— 不发，让它落回 magpie 自己的兜底链。
+    // （2026-11-24 t-model-prices 抓到的「编数字」）
+    const { cost: _droppedCost, ...rest } = m ?? {}
     out[id] = {
-      ...m,
+      ...rest,
+      // ⚠️ **`api` 必须给**：magpie 的「测试模型」按 `api.npm` 选协议。不给就
+      // 落到默认 chat 协议，把视频模型当聊天模型发 ⇒
+      // `HTTP 400 invalid params, unknown model 'MiniMax-Hailuo-2.3'`。
+      // 与上游 mediaModelOf 同款：图像 openai-compatible（当抽屉走 images API），
+      // 视频 anthropic（只认 output.video，走 videos API）。
+      api: {
+        id,
+        url: `${site?.llm ?? ''}/mavis/api/v1/llm/v1`,
+        npm: isImage ? '@ai-sdk/openai-compatible' : '@ai-sdk/anthropic',
+      },
       // 媒体模型没有对话上下文（不是在聊天里用的），给 0 而不是缺字段。
       limit: { context: 0, output: 0 },
       capabilities: {
