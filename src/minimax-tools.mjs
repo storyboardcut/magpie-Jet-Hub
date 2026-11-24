@@ -124,4 +124,60 @@ export function isMinimaxProvider(dshProvider) {
   return Object.prototype.hasOwnProperty.call(SITE_OF_PROVIDER, dshProvider)
 }
 
-export { SITE_OF_PROVIDER, PROVIDER_OF_SITE }
+/**
+ * 把上游 `mediaConfigModels()` 的简写补齐成 **magpie 供应商编辑器要的完整形状**。
+ *
+ * 上游那份是给 OpenCode 用的：`limit: {context:0, output:0}` 没写 `capabilities`
+ * 也没写输入模态。magpie 侧会读 `capabilities.input` 决定「能不能发图/收视频」，
+ * `tests/t-plugin.mjs` 也有断言盯着（缺了好几条能力列会是空的）。
+ *
+ * @param {Record<string, object>} models `mediaConfigModels()` 的产物
+ */
+export function toMagpieMediaModels(models) {
+  const out = {}
+  for (const [id, m] of Object.entries(models)) {
+    const isImage = Array.isArray(m?.modalities?.output) && m.modalities.output.includes('image')
+    out[id] = {
+      ...m,
+      // 媒体模型没有对话上下文（不是在聊天里用的），给 0 而不是缺字段。
+      limit: { context: 0, output: 0 },
+      capabilities: {
+        temperature: false,
+        reasoning: false,
+        attachment: true,
+        toolcall: false,
+        // 输入：文字 + 图（做视频时首帧就是图）。
+        input: { text: true, image: true, audio: false, video: false, pdf: false },
+        // 输出：图像模型出图，视频模型出视频，都不出文字。
+        output: { text: false, image: isImage, audio: false, video: !isImage, pdf: false },
+        interleaved: false,
+      },
+    }
+  }
+  return out
+}
+
+/**
+ * 建一个**媒体请求**传输函数（给 `handleMediaFetch` 用）。
+ *
+ * 与 `minimaxTools` 里那个的区别：这里**不绑定站点**，每次调用现取令牌。
+ * 上游 `handleMediaFetch` 每次请求都会传 `siteId`，所以令牌要按站点取，
+ * 不能像工具那样缓存一个 transport 到底。
+ *
+ * @param {() => Promise<string>} accessOf 取当前账号 access_token（失败抛错）
+ */
+export function makeMediaTransport(accessOf) {
+  const perCall = new Map()
+  return async function request(siteId, path, body, opts = {}) {
+    const site = SITES[siteId]
+    if (!site) throw new Error(`未知的 MiniMax 站点：${siteId}`)
+    let transport = perCall.get(siteId)
+    if (transport === undefined) {
+      transport = _internal.makeTokenRequest(site, await accessOf())
+      perCall.set(siteId, transport)
+    }
+    return transport(siteId, path, body, opts)
+  }
+}
+
+export { SITE_OF_PROVIDER, PROVIDER_OF_SITE, SITES }
