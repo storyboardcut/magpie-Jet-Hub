@@ -133,7 +133,7 @@ export function isMinimaxProvider(dshProvider) {
  *
  * @param {Record<string, object>} models `mediaConfigModels()` 的产物
  */
-export function toMagpieMediaModels(models) {
+export function toMagpieMediaModels(models, site) {
   const out = {}
   for (const [id, m] of Object.entries(models)) {
     const isImage = Array.isArray(m?.modalities?.output) && m.modalities.output.includes('image')
@@ -145,6 +145,19 @@ export function toMagpieMediaModels(models) {
     const { cost: _droppedCost, ...rest } = m ?? {}
     out[id] = {
       ...rest,
+      // ⚠️ **`api` 必须给**（2026-11-24 真机报障）：magpie 的「测试模型」按钮
+      // 按 `api.npm` 决定用哪套协议。不给的话它落到默认的 chat 协议，把
+      // `MiniMax-Hailuo-2.3` 当聊天模型发给上游 ⇒
+      // `HTTP 400 invalid params, unknown model 'MiniMax-Hailuo-2.3'`。
+      // 上游同款：图像模型用 `@ai-sdk/openai-compatible`（magpie 据此当
+      // 「抽屉」走 /v1/images/generations），视频模型用 `@ai-sdk/anthropic`
+      // （只认 output.video，走 /v1/videos）。
+      api: {
+        id,
+        // 与上游 mediaModelOf 同款：`site.llm + '/mavis/api/v1/llm/v1'`。
+        url: `${site?.llm ?? ''}/mavis/api/v1/llm/v1`,
+        npm: isImage ? '@ai-sdk/openai-compatible' : '@ai-sdk/anthropic',
+      },
       // 媒体模型没有对话上下文（不是在聊天里用的），给 0 而不是缺字段。
       limit: { context: 0, output: 0 },
       capabilities: {

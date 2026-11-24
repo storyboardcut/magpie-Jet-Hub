@@ -2852,7 +2852,7 @@ export function makePlugin(dshProvider) {
           return got.access
         })
         return {
-          models: toMagpieMediaModels(mediaConfigModels()),
+          models: toMagpieMediaModels(mediaConfigModels(), SITES[siteId]),
           fetch: (url, init) => handleMediaFetch(url, init ?? {}, { request: transport, siteId }),
           // 上游签名是 `createSearchHook(site, post)`，`site` 收的是站点对象。
           search: createSearchHook(SITES[siteId], transport),
