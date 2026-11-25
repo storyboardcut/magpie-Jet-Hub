@@ -96,8 +96,8 @@ console.log('· 4  撞名与空名的边界')
   ]))
   const keys = Object.keys(ms)
   const aliasCount = keys.filter((k) => k === 'Same-Name').length
-  ok(aliasCount === 1, '撞名只保留一个别名（另一个退回数字 id）', keys.join(', '))
-  ok(keys.includes('111') || keys.includes('222'), '撞名时至少一个保留数字 id', keys.join(', '))
+  ok(aliasCount === 1, '撞名时第一个占原名，第二个加数字后缀（不再退回数字 id）', keys.join(', '))
+  ok(keys.includes('Same-Name') && keys.includes('Same-Name-2'), '撞名两个都拿到可读 id（原名 + -2）', keys.join(', '))
   ok(!keys.includes('same-name'), 'slug 大小写按原样（不做 lowerCase，避免与上游 slug 撞）')
 }
 

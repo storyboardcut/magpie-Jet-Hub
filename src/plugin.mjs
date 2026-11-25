@@ -2797,8 +2797,17 @@ function aliasesFor(dshProvider, rows) {
   const map = new Map()
   const used = new Set()
   for (const [bare, name] of numeric) {
-    const slug = slugOfName(name)
-    if (slug === '' || used.has(slug)) continue
+    let slug = slugOfName(name)
+    if (slug === '') continue
+    // ⚠️ 撞名不直接放弃 —— 早先版本「后者退回数字 id」，于是
+    // 「Kimi K3.1 Pro 高速」显示成 `9878038274`（2026-11-25 实测）。
+    // 改成加数字后缀区分：`Kimi-K3.1-Pro` / `Kimi-K3.1-Pro-2`。
+    // 后缀只用序号，不加原名里的中文（slug 里不能有中文）。
+    if (used.has(slug)) {
+      let n = 2
+      while (used.has(`${slug}-${n}`) && n < 100) n += 1
+      slug = `${slug}-${n}`
+    }
     used.add(slug)
     map.set(slug, bare)
   }
