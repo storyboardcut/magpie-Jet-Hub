@@ -41,9 +41,6 @@
 
 import { JetHubContainer } from './container.mjs'
 import { parseRefs } from './credentials.mjs'
-// MiniMax 积分分页截断的插件侧修正（`page_size=1000` 超上限 → 被截断到 20 条）。
-// 见模块头：vendor 一个字节不动，只在结果出来后补全。
-import { patchMiniMaxBalance } from './minimax-balance-fix.mjs'
 // MiniMax 多媒体工具（图像/视频/语音/音乐/多模态）：用本插件已有账号的令牌。
 // 工具实现原样来自 minimax/（上游 @magpie-community/opencode-minimax-auth，MIT），
 // 只把「令牌从哪来」换成本插件的容器 —— 见 src/minimax-tools.mjs 文件头。
@@ -588,11 +585,6 @@ function containerFor(options, log) {
     providerNames: NAMES,
     log,
   })
-  // ⚠️ **MiniMax 积分分页修正**（2026-11-25）：上游给的 `page_size=1000` 超过服务端
-  // 上限（实测 120 就 400），失败后回退成裸请求，而裸请求只回最近 20 个积分包
-  // ⇒ 签到新增的包把最老的挤出窗口 ⇒ 界面「积分不涨」（实测少算 3888 分）。
-  // 这个补丁在结果出来后用正确分页重查并覆盖，`vendor/` 一个字节不动。
-  patchMiniMaxBalance(shared)
   return shared
 }
 
