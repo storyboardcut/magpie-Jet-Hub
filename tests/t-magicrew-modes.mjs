@@ -99,6 +99,14 @@ const MODES = ['browser', 'local-browser']
 
 // 3a. 国内站：第一条腿成功 ⇒ 只调一次，mode 是 browser
 {
+  // ⚠️ 2026-11-25 真机缺陷的回归锚点：`doubao` 的 `account.create` 分支判据同样是
+  // `provider === 'doubao' && req.mode === 'browser'`（vendor/lib/jet-hub-rpc.js:5078），
+  // 不在这个集合里就会**一次浏览器窗口都不弹**、面板显示「登录未完成」、池里留空壳。
+  // 上游 2026-11-22 接豆包时没同步这张表 —— 这条断言就是防同类漏项的。
+  ok(
+    BROWSER_MODE_SET.has('doubao'),
+    'BROWSER_MODE_PROVIDERS 必须含 doubao（否则「新建豆包账号」弹不出浏览器窗口）',
+  )
   const h = harness([{ accountId: 'a', loginUrl: '' }])
   const smartFn = smart(h.startNewAccount, MODES)
   const got = await smartFn({}, 'magicrew', () => {})

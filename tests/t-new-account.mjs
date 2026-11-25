@@ -133,10 +133,18 @@ const src = fs.readFileSync(SRC, 'utf8').replace(/\r\n/g, '\n')
  *
  * 它们与其余各家的差别：`ask()` 出一屏说明、`authorize()` 返 url +
  * `method:'code'`（真机实测理由见下面那段注释）。
+ *
+ * ⚠️ **豆包（doubao）是例外**（2026-11-25）：它也在 `BROWSER_MODE_PROVIDERS`
+ * 里（需要 `mode:'browser'` 才会进自家分支），但它的登录是**扫码开窗** ——
+ * `account.create` 直接开一个一次性独立 profile 的可见窗口，用户在窗口里扫码，
+ * 拿到的是一整串 cookie，**没有「粘回来」那一步**。所以它不该走两屏 + `'code'` 这套：
+ * 给它加 `ask()` 会让宿主等一个永远粘不回来的码。
+ * 这里从派生集合里排掉它，让它落到下面「没有 ask / 不是 code 型」的默认断言。
  */
 const PASTE_LOGIN_PROVIDERS = new Set(
   [...(src.match(/const BROWSER_MODE_PROVIDERS = new Set\(\[([^\]]*)\]\)/)?.[1] ?? '')
-    .matchAll(/'([^']+)'/g)].map((m) => `jet-hub-${m[1]}`),
+    .matchAll(/'([^']+)'/g)].map((m) => `jet-hub-${m[1]}`)
+    .filter((id) => id !== 'jet-hub-doubao'),
 )
 
 /* ── 1. 从源码里截出新建账号那一整段原样求值 ── */

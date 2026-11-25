@@ -1167,8 +1167,14 @@ const MAGICREW_CREATE_MODES = ['browser', 'local-browser']
  * 逐字同型（`:4510`），不传 `mode` 就是 `unknown provider: baizhi` —— 面板上
  * 「新建账号 → 百智云」同样是死路。纳入后不影响 `baizhi.startSession`（那是给
  * **已有**账号补 cookie 的另一条入口，走自己的 RPC，与本表无关）。
+ *
+ * ⚠️ `doubao`（豆包）在 2026-11-25 纳入：上游 2026-11-22 给它接了模型适配器
+ * （`vendor/lib/jet-hub-rpc.js:5078` 的 `provider === 'doubao' && req.mode === 'browser'`），
+ * 判据与上面几家逐字同型。不传 `mode` 的实测症状是**面板显示「登录未完成」、
+ * 浏览器窗口一次都不弹**（`loginUrl` 空串、凭据不落盘、池里留一条空壳）——
+ * 2026-11-25 真机复现，与 monkeycode 那次同一个形态。
  */
-const BROWSER_MODE_PROVIDERS = new Set(['monkeycode', 'monkeycodeintl', 'baizhi'])
+const BROWSER_MODE_PROVIDERS = new Set(['monkeycode', 'monkeycodeintl', 'baizhi', 'doubao'])
 
 /** 轮询 `login.poll` 的间隔（本体登录流程最短也要一两秒，2 秒够用且不吵）。 */
 const LOGIN_POLL_MS = 2_000
