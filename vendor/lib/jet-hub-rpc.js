@@ -647,6 +647,58 @@ export function resolveCreditsStatusConcurrency(raw, accountCount) {
     return Math.max(1, Math.min(capped, accountCount || 1));
 }
 /**
+ * ★★★ **校验「子代理专属模型 + 思考强度」是否真实可用**（2026-11-24）。
+ *
+ * ## 为什么必须是**导出的纯函数**（上游原话）
+ *
+ * > 「`subagent/model-validation` 的用例是**纯源码文本**，`if (false)` 注入仍 6/6 绿。」
+ *
+ * 我第一版把这段校验写在 `credits.window.set` 的 `case` 体里，用例只能在源码里
+ * 找字符串 —— 而 `if (false && …)` 短路后**字面量仍在**，断言照样绿。
+ *
+ * ⇒ 抽成本函数后，用例可以**直接调用**它并断言返回值。
+ *
+ * ## 校验三条（判据与 `credits.window.models` 下拉框**同源**）
+ *
+ * | 判据 | 来源 |
+ * |---|---|
+ * | 模型存在且**已启用** | `listEnabledModelIds()`（= `llm.listModels` − 黑名单）|
+ * | 思考档位属于该模型 | `listEffortsOf(model)` |
+ *
+ * ## ⚠️ 两条刻意的宽容（**不是漏洞**）
+ *
+ * | 情况 | 行为 | 理由 |
+ * |---|---|---|
+ * | 目录读不到（离线 / 适配器未就绪）| **跳过**存在性校验 | 宁可接受一个可能过期的 id，也不要让离线环境完全无法保存 |
+ * | 模型**没声明档位**（`efforts` 为空）| **跳过**档位校验 | 那种模型配 `reasoningEffort` 本来就不会被用（`select()` 忽略）|
+ *
+ * ⚠️ 注意「跳过」的表示是 **`undefined`**，不是 `[]` ——
+ *    `[]` 会让 `includes()` 恒 false ⇒ **离线时所有保存都被拒**（我第一版就写错过）。
+ *
+ * @returns `undefined` = 通过；字符串 = 拒绝原因（调用方回 `bad-request`）
+ */
+export async function validateSubagentModelChoice(input) {
+    const enabledIds = await input.listEnabledModelIds();
+    if (enabledIds !== undefined && !enabledIds.includes(input.model)) {
+        return `subagent.model「${input.model}」不在该渠道已启用的模型中`
+            + `（可选 ${enabledIds.length} 个；请在设置里启用该模型后重试）`;
+    }
+    /** ⚠️ 目录读不到时**不校验档位** —— 判断不了就别拦。 */
+    if (input.reasoningEffort === undefined || enabledIds === undefined)
+        return undefined;
+    const efforts = await input.listEffortsOf(input.model);
+    if (efforts === undefined)
+        return undefined;
+    /** ⚠️ 空 `efforts` = 该模型没有思考档位 ⇒ 不校验（配了也不会被用）。 */
+    if (efforts.length === 0)
+        return undefined;
+    if (!efforts.includes(input.reasoningEffort)) {
+        return `subagent.reasoningEffort「${input.reasoningEffort}」`
+            + `不是模型「${input.model}」的合法档位（可选 ${efforts.join(' / ')}）`;
+    }
+    return undefined;
+}
+/**
  * 逐账号收集签到状态（**有限并发**，默认 3；见函数体内 `concurrency` 的说明）。
  *
  * ⚠️ **原实现是纯串行**，注释写「顺序执行，避免并发触发风控」。2026-10-22 改成
@@ -7248,9 +7300,39 @@ function registerJetHubEndpoints(ctx, pool, auths, modelAdapters) {
                         const allForPick = await pool.listAllAccounts();
                         const pickId = allForPick
                             .filter((a) => a.provider === req.provider && a.enabled !== false)[req.position - 1]?.id;
-                        if (pickId !== undefined) {
-                            await pool.setUserPickedAccount?.(req.provider, req.sessionId, pickId);
+                        /**
+                         * ⚠️⚠️ **位次越界必须报错，不能静默跳过**（2026-11-24 第四轮审计）。
+                         *
+                         * ## 原缺陷
+                         *
+                         * 上一版写的是 `if (pickId !== undefined) { …写… }` —— `pickId` 越界时
+                         * **什么都不做、还回 `ok: true`**。
+                         *
+                         * ## 为什么这很糟
+                         *
+                         * 用户选了「位次 5」而池里只剩 3 个号时：
+                         * 1. `preferredRotation` 已被写入（上面那段）；
+                         * 2. `userPickedAccountId` **没写** ⇒ 子代理仍用旧 pin；
+                         * 3. 界面回 `selected: preferredRotationFor(…)` ⇒ **显示新位次**。
+                         *
+                         * ⇒ **界面说生效了、实际没生效**，且零报错 —— 与「set 了不生效」
+                         *    那类缺陷同形（本 PR 已修过两次同一形态）。
+                         *
+                         * ⚠️ 宁可拒绝这次写入，让用户看到「位次超出范围」，
+                         *    也不接受一个「只写了一半」的部分成功。
+                         */
+                        if (pickId === undefined) {
+                            const enabledCount = allForPick
+                                .filter((a) => a.provider === req.provider && a.enabled !== false).length;
+                            return {
+                                ok: false,
+                                error: {
+                                    code: 'bad-request',
+                                    message: `位次 ${req.position} 超出范围（当前 ${enabledCount} 个启用账号）`,
+                                },
+                            };
                         }
+                        await pool.setUserPickedAccount?.(req.provider, req.sessionId, pickId);
                     }
                     else {
                         /**
@@ -11933,7 +12015,34 @@ function registerJetHubEndpoints(ctx, pool, auths, modelAdapters) {
                                 };
                             }
                         }
-                        /** ③ 模型 / 思考强度：非空字符串时才接受。 */
+                        /**
+                         * ③ 模型 / 思考强度：**必须真实存在**（2026-11-24 第二轮审计 P1-5）。
+                         *
+                         * ## 原缺陷（上游原话）
+                         *
+                         * > 「**模型 id 零校验**即落盘并 `select()`。」
+                         *
+                         * 上一版只判「非空字符串」—— 用户（或老版本客户端）传一个
+                         * **不存在的模型 id** 时：
+                         * 1. 设置照常落盘；
+                         * 2. `subagent/start` 时 `agent.model.select({ model: '不存在的' })` 被拒；
+                         * 3. 而那个 `catch` 把它吞成静默 ⇒ **子代理一直用主代理模型**，
+                         *    用户以为「我设了」。
+                         *
+                         * ⇒ **零报错 + 界面显示已生效**，与「设了不生效」那类缺陷同形
+                         *（本 PR 已修过三次同一形态）。
+                         *
+                         * ## 校验口径必须与 `credits.window.models` **逐字同源**
+                         *
+                         * | 判据 | 来源 |
+                         * |---|---|
+                         * | 模型存在 | `ctx.llm.listModels(provider)` |
+                         * | 模型**已启用** | `pool.listDisabledModels(provider)[id] !== true` |
+                         * | 思考档位存在 | `ctx.llm.resolveModelInfo(provider, id).reasoning.efforts` |
+                         *
+                         * ⚠️ 前两条与 `credits.window.models` **同一个取数路径**（那是下拉框的真源）
+                         *    —— 否则「下拉框里能选、保存后被拒」或反之。
+                         */
                         for (const [key, value] of [
                             ['subagent.model', rawSub.model],
                             ['subagent.reasoningEffort', rawSub.reasoningEffort],
@@ -11943,6 +12052,48 @@ function registerJetHubEndpoints(ctx, pool, auths, modelAdapters) {
                                     ok: false,
                                     error: { code: 'bad-request', message: `${key} 必须是非空字符串（收到 ${JSON.stringify(value)}）` },
                                 };
+                            }
+                        }
+                        /**
+                         * ⚠️ **模型存在性 + 已启用 + 档位合法性**
+                         *
+                         * ⚠️⚠️ **必须走导出的纯函数 `validateSubagentModelChoice()`**
+                         *（2026-11-24 上游批评：「`subagent-model-validation` 的用例是
+                         * **纯源码文本**，`if (false)` 注入仍 6/6 绿」）。
+                         *
+                         * ⇒ 判据抽成可 import 的纯函数后，用例才能**行为级**断言，
+                         *    而不是在源码里找字符串。
+                         */
+                        if (rawSub.model !== undefined && ctx.llm !== undefined) {
+                            const verdict = await validateSubagentModelChoice({
+                                model: rawSub.model,
+                                reasoningEffort: rawSub.reasoningEffort,
+                                listEnabledModelIds: async () => {
+                                    try {
+                                        const all = await ctx.llm.listModels(req.provider);
+                                        const disabledForProvider = pool.listDisabledModels(req.provider);
+                                        return all
+                                            .filter((m) => disabledForProvider[m.id] !== true)
+                                            .map((m) => m.id);
+                                    }
+                                    catch {
+                                        /** ⚠️ 目录读不到（离线 / 适配器未就绪）⇒ `undefined` = 跳过存在性校验。 */
+                                        return undefined;
+                                    }
+                                },
+                                listEffortsOf: async (modelId) => {
+                                    try {
+                                        const resolved = await ctx.llm.resolveModelInfo(req.provider, modelId);
+                                        return (resolved?.reasoning?.efforts ?? []).map((e) => String(e.id));
+                                    }
+                                    catch {
+                                        /** ⚠️ 单个模型解析失败 ⇒ `undefined` = 跳过档位校验（不拦保存）。 */
+                                        return undefined;
+                                    }
+                                },
+                            });
+                            if (verdict !== undefined) {
+                                return { ok: false, error: { code: 'bad-request', message: verdict } };
                             }
                         }
                         await pool.setSubagentRotation(req.provider, {

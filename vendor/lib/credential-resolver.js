@@ -116,6 +116,7 @@
  *    给它接判定反而会改变既有行为（`ratelimit-misreport-behavior.spec.ts`
  *    有专门一条锁死这个现状）。
  */
+import { BUDDY_BALANCE_TIER } from './buddy-balance-rank.js';
 import { pickBuddyAccount } from './buddy-balance-selector.js';
 import { accountIdAtPosition, startIndexOfSlot, subagentParentOf, subagentSettingActive } from './subagent-rotation.js';
 import { sessionBalanceEnabled } from './session-balance.js';
@@ -205,6 +206,46 @@ selector, allowPermanent) {
      * 否则 `startIndexOfSlot` 会因「找不到基准」返回 undefined。
      */
     return same.includes(mainStartId) ? same : enabledIds;
+}
+/**
+ * ★★★ **无锚点时，取「档位最优」的账号作锚**（2026-11-24，PR #153 双审 P1①）。
+ *
+ * ## 缺陷
+ *
+ * 上一版：`tierAnchorId === undefined` ⇒ `sameTierIds = enabledIds`（**全池**）。
+ *
+ * 而 `tierAnchorId === undefined` 正是**生产默认**：主代理「默认不指定起点」时
+ * `mainSessionStartId` 是 `undefined`，子代理自己的 `baseRotationStartId` 也是
+ * `undefined`。
+ *
+ * ⇒ 档位过滤一次都没生效 ⇒ `startIndexOfSlot` 在全池上错开 ⇒
+ *   池 `[临期A, 临期B, 永久P]` 时**第二个子代理必然拿到 `P`**（先烧永久积分）。
+ *   双审两侧独立实测：`child1=RB`、**`child2=RP`** —— 与上游原报障**逐字节相同**。
+ *
+ * ## 修法
+ *
+ * 无锚点时**不要**用「全池第一个」当锚，而是**按 `cachedTierOf` 找档位最优
+ *（`imminent:0` → `expiring:1` → `permanent:2`，**数值越小越优先**）的那个账号**，
+ * 再用它调 {@link sameTierAsMainStart} ⇒ 子代理只在**临期档内**错开。
+ *
+ * ⚠️ `selector` 缺席 / 无 `cachedTierOf`（单测替身、非 buddy 家）⇒ 返回 `undefined`
+ *    ⇒ 调用方退回全池（**无法判断档位时的既有降级**，保持不变）。
+ * ⚠️ 跳过 `none`（3）：那是「无余额 / 查询失败 / 锁定态只剩永久」——
+ *    拿它当锚会把子代理导向无余额的号。
+ */
+function bestTierAnchorId(enabledIds, selector, allowPermanent) {
+    if (selector === undefined || typeof selector.cachedTierOf !== 'function')
+        return undefined;
+    const asCandidate = (id) => ({ id });
+    let best;
+    for (const id of enabledIds) {
+        const tier = selector.cachedTierOf(asCandidate(id), allowPermanent);
+        if (tier === undefined || tier >= BUDDY_BALANCE_TIER.none)
+            continue;
+        if (best === undefined || tier < best.tier)
+            best = { id, tier };
+    }
+    return best?.id;
 }
 /**
  * 显式声明「**本家没有免费模型概念**」的 `isFreeModel` 实现。
@@ -809,17 +850,43 @@ export function createCredentialResolver(deps, config) {
                 const userPickedId = assignment?.userPickedAccountId;
                 const pinnedId = assignment?.pinnedAccountId;
                 /**
-                 * ★★★ **`startDecidedByPin`**：pin / userPicked 命中 ⇒ **跳过策略现算**
-                 *（2026-11-24，上游审计 ⑤：上一版 `sequence` 等模式会无条件覆盖 pin）。
+                 * ★★★ **两条独立标记**（2026-11-24 第四轮审计后的修正）。
                  *
-                 * ⚠️ 唯一例外是 `fixed`（用户手选位次，比自动 pin 更具体）。
+                 * | 标记 | 含义 |
+                 * |---|---|
+                 * | `startDecidedByPin` | pin / userPicked 命中 ⇒ **跳过策略现算** |
+                 * | `startDecidedByUser` | **用户手选**命中 ⇒ 即使 `fixed` 也不覆盖 |
+                 *
+                 * ## ⚠️ 为什么必须分开（上游第 4 轮「`fixed` 两路径分叉」）
+                 *
+                 * 免费路径的语义是：**用户手选 > 位次**（`fixed` 也遵从用户手选）。
+                 * 而付费路径上一版写的是：
+                 *
+                 * ```ts
+                 * const strategyShouldApply = startDecidedByPin !== true
+                 *   || setting?.startMode === 'fixed'      // ← 让 fixed 覆盖 userPicked
+                 * ```
+                 *
+                 * ⇒ **两条路径对同一件事判断相反**（免费遵从、付费覆盖）。
+                 * 这正是本仓反复记录的「同一语义两处实现必然漂移」。
+                 *
+                 * ## 统一后的语义（与免费路径逐字同构）
+                 *
+                 * | 级 | 来源 | `fixed` 模式下 |
+                 * |---|---|---|
+                 * | ① | `userPickedAccountId` | **仍生效**（用户手选最具体）|
+                 * | ② | `pinnedAccountId` | **跳过**（旧策略的结果，不该拖住新位次）|
+                 * | ③ | 策略现算（`fixed` 用它）| **必须走到** |
                  */
                 let startDecidedByPin = false;
+                /** ⚠️ 只有**用户手选**才算「用户明确意愿」，pin 是系统算的不算。 */
+                let startDecidedByUser = false;
                 if (userPickedId !== undefined
                     && candidates.some((c) => c.id === userPickedId)) {
-                    /** ① 用户手动选且仍可用 ⇒ 用它（最高优先级）。 */
+                    /** ① 用户手动选且仍可用 ⇒ 用它（最高优先级，**连 `fixed` 都不覆盖**）。 */
                     rotationStartId = userPickedId;
                     startDecidedByPin = true;
+                    startDecidedByUser = true;
                     startOwnedBySubagent = true;
                 }
                 else if (pinnedId !== undefined) {
@@ -843,15 +910,25 @@ export function createCredentialResolver(deps, config) {
                     }
                 }
                 /**
-                 * ⚠️⚠️ **`startDecidedByPin` 守卫是本次修复的核心**（上游审计 ⑤）。
+                 * ⚠️⚠️ **策略现算的进入判据**（2026-11-24 第四轮审计后统一）。
                  *
-                 * 上一版这里**无条件进入** ⇒ slot 现算把 pin / userPicked 覆盖掉
-                 * ⇒「设了不生效，而界面显示已生效」。
+                 * ```ts
+                 * strategyShouldApply =
+                 *   startDecidedByUser !== true                          // 用户手选优先，恒不覆盖
+                 *   && (startDecidedByPin !== true || startMode === 'fixed')  // fixed 可覆盖系统 pin
+                 * ```
                  *
-                 * ⚠️ **`fixed` 是例外**：用户手选的位次比自动 pin 更具体 ⇒ 仍进入。
+                 * | `fixed`? | 用户手选? | 系统 pin? | 策略现算 | 结果 |
+                 * |---|---|---|---|---|
+                 * | 否 | 有 | — | ❌ 跳过 | **用用户手选** |
+                 * | 否 | 无 | 有 | ❌ 跳过 | **用 pin** |
+                 * | 否 | 无 | 无 | ✅ 进入 | 按 slot 错开 |
+                 * | **是** | **有** | — | ❌ **跳过** | **用用户手选** ← 与免费路径一致 |
+                 * | **是** | 无 | 有 | ✅ 进入 | 用位次（pin 是旧结果）|
+                 * | **是** | 无 | 无 | ✅ 进入 | 用位次 |
                  */
-                const strategyShouldApply = startDecidedByPin !== true
-                    || setting?.startMode === 'fixed';
+                const strategyShouldApply = startDecidedByUser !== true
+                    && (startDecidedByPin !== true || setting?.startMode === 'fixed');
                 if (strategyShouldApply
                     && setting !== undefined && assignment !== undefined
                     && setting.startMode !== undefined && setting.startMode !== 'follow') {
@@ -885,16 +962,64 @@ export function createCredentialResolver(deps, config) {
                         /**
                          * 非 fixed：在主代理起点**所在档位**里错开。
                          *
-                         * ⚠️ **主代理没配起点时**（`baseRotationStartId === undefined`）：
-                         * 它的实际起点就是「档次排序的第一个可用账号」⇒ 用 `undefined`
-                         * 让 `sameTierAsMainStart` 退回全部启用账号（档位未知），
-                         * 再让 `startIndexOfSlot` 以「第 0 项」为基准错开。
+                         * ⚠️⚠️ **闸门读的必须是「主代理的起点」，不是「子代理自己的」**
+                         * （2026-11-24 第四轮对抗审计 P1，**真缺陷**）。
+                         *
+                         * ## 原缺陷（上游原话）
+                         *
+                         * > 「**临期优先对子代理失效**：池 `[临期, 临期, 永久]` 时，`child-2`
+                         * >   会拿到**永久号、先烧永久积分**。」
+                         *
+                         * 根因就在这一行：上一版写的是
+                         *
+                         * ```ts
+                         * const sameTierIds = baseRotationStartId === undefined
+                         *   ? enabledIds                                            // ← 全量账号
+                         *   : sameTierAsMainStart(enabledIds, baseRotationStartId, …)
+                         * ```
+                         *
+                         * 而 `baseRotationStartId = preferredRotationFor(provider, sessionId)`，
+                         * **`sessionId` 是子代理自己的** —— 用户不可能给一个还没存在的子代理
+                         * 设过起点 ⇒ **生产路径恒 `undefined`** ⇒ 恒走 `enabledIds` 分支
+                         * ⇒ **档位过滤一次都没生效过** ⇒ 子代理可以先烧永久积分。
+                         *
+                         * ⚠️ 这与用户明确要求的「档次优先：临期 → 短期 → 永久」**直接冲突**。
+                         *
+                         * ## 修法：档位基准改用 `mainSessionStartId`
+                         *
+                         * `mainSessionStartId` 才是「主代理当前用的那个号」——
+                         * 只有它所在的档位才是子代理该错开的档位。
+                         *
+                         * | 情况 | `mainSessionStartId` | 档位序列 |
+                         * |---|---|---|
+                         * | 主代理配了起点 | 有值 | **主代理起点所在档位的账号** ← 修好后的行为 |
+                         * | 主代理没配起点 | `undefined` | 全量账号（档位未知，见下）|
+                         *
+                         * ⚠️ **主代理没配起点时为什么仍退全量**：它的实际起点是
+                         *    「档次排序的第一个可用账号」，而那需要余额（本函数还没取）
+                         *    ⇒ 拿不到档位。此时退化为「全池错开」—— 仍然可用，
+                         *    只是分布可能跨档（而不是「全部挤在主代理那个号上」）。
+                         *    ⚠️ 这是**已知降级**，比「忽略档位」好，但不如「主代理配了起点」的情形。
                          */
-                        const sameTierIds = baseRotationStartId === undefined
+                        const tierAnchorId = mainSessionStartId ?? baseRotationStartId;
+                        /** ⚠️ 余额缓存在 `plan.selector` 里；它可能是 Loomy（无 cachedTierOf）⇒ 内部降级。 */
+                        const tierSelector = 'cachedTierOf' in plan.selector
+                            ? plan.selector
+                            : undefined;
+                        /**
+                         * ★★★ **无锚点时也必须做档位过滤**（2026-11-24，双审 P1①）。
+                         *
+                         * 上一版在这里 `? enabledIds`（全池）—— 而「无锚点」恰是**生产默认**
+                         *（主代理不指定起点）⇒ 档位过滤一次都没生效 ⇒
+                         * 池 `[临期A, 临期B, 永久P]` 时**第二个子代理拿到永久号、先烧永久积分**。
+                         *
+                         * 修法：无锚点时用 {@link bestTierAnchorId} 找「档位最优（临期）」的号作锚。
+                         * ⚠️ 找不到（无 `cachedTierOf` / 全 `none`）才退回全池 —— 那是既有降级。
+                         */
+                        const effectiveTierAnchorId = tierAnchorId ?? bestTierAnchorId(enabledIds, tierSelector, allowPermanent);
+                        const sameTierIds = effectiveTierAnchorId === undefined
                             ? enabledIds
-                            : sameTierAsMainStart(enabledIds, baseRotationStartId, 
-                            /** ⚠️ 余额缓存在 `plan.selector` 里；它可能是 Loomy（无 cachedTierOf）⇒ 内部降级。 */
-                            'cachedTierOf' in plan.selector ? plan.selector : undefined, allowPermanent);
+                            : sameTierAsMainStart(enabledIds, effectiveTierAnchorId, tierSelector, allowPermanent);
                         /**
                          * ★★★ **基准 = 主代理当前实际用的账号**（2026-11-24，上游审计 ④ 的修复）。
                          *

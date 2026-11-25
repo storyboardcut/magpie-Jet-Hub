@@ -216,6 +216,8 @@ const PROVIDER_SVG = {
   // CodeArts 是华为云的
   codearts: badge(HUAWEICLOUD),
   codely: `data:image/png;base64,${CODELY_PNG_BASE64}`,
+  // 豆包（字节）：上游 provider-icons.js 的官方标识（2026-11-22 补上模型适配器后启用）
+  doubao: `data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHJlY3Qgd2lkdGg9IjI0IiBoZWlnaHQ9IjI0IiByeD0iNSIgZmlsbD0iIzMzNzBGRiIvPjxjaXJjbGUgY3g9IjEyIiBjeT0iMTAiIHI9IjQiIGZpbGw9IiNmZmYiLz48Y2lyY2xlIGN4PSIxMC40IiBjeT0iOS42IiByPSIwLjkiIGZpbGw9IiMzMzcwRkYiLz48Y2lyY2xlIGN4PSIxMy42IiBjeT0iOS42IiByPSIwLjkiIGZpbGw9IiMzMzcwRkYiLz48cGF0aCBkPSJNNyAxNi41YzEuNiAyIDguNCAyIDEwIDAiIHN0cm9rZT0iI2ZmZiIgc3Ryb2tlLXdpZHRoPSIxLjYiIGZpbGw9Im5vbmUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPjwvc3ZnPg==`,
   gemini: badge(GEMINI),
   lobsterai: `data:image/png;base64,${LOBSTERAI_PNG_BASE64}`,
   loomy: `data:image/png;base64,${LOOMY_PNG_BASE64}`,

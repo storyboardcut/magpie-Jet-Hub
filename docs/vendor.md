@@ -7,8 +7,8 @@
 | 项 | 值 |
 |---|---|
 | 上游源码仓库 | [`iJetLi/deepseek-harness-codearts`](https://gitee.com/iJetLi/deepseek-harness-codearts)（**主仓**；GitHub 上的 [`iJetLi/dsh-providers-hub`](https://github.com/iJetLi/dsh-providers-hub) 是镜像 —— 2026-11-22 实测两边同头在 `098de90`，镜像不再落后） |
-| 代码对应 commit | `43a00cdf`（2026-11-22；本地跟进同步，Betsy20 上次 vendored 到 `1d12f80` / 2026-11-10） |
-| 版本号 | `0.2.1-rc.4`（上游 `package.json` 与本次构建同一次提交） |
+| 代码对应 commit | `92cb1d0`（2026-11-25；本地跟进同步，上游 43a00cdf→92cb1d0 共 71 个提交） |
+| 版本号 | `0.2.1-rc.5`（上游 `package.json` 与本次构建同一次提交） |
 | 许可 | MIT，`Copyright (c) 2026 Jet` —— 全文见 [`vendor/LICENSE`](../vendor/LICENSE) |
 
 **为什么不用 npm 包**：npm 上的版本长期落后于仓库 `master`（2026-11-10 时点实测：npm 最新 `2.21.261109` 的 `lib/` 1138 个文件 vs master 1170 个，缺 32 个、另 66 个过期）。2026-11-22 本地跟进同步仍沿用同一条理由，没再对 npm 做逐文件比对。这一版是从源码 clone 下来 `npm install`（自动跑 `tsc -p tsconfig.json && node scripts/copy-assets.mjs && node plugin-src/client/build.mjs && node scripts/sync-bootstrap-lib.mjs`）构建出 `lib/`，再连同 `locale/` 拷进来；`package.json` 与 `LICENSE` 也取同一次提交的。
@@ -41,7 +41,7 @@ cp -r lib locale package.json LICENSE /path/to/magpie-Jet-Hub/vendor/
 
 ## 与上游构建产物的差异
 
-`lib/` 共 **1314** 个文件（含客户端 bundle `lib/client/jet-hub.js` 与 `lib/qoder-auth-wasm.wasm`），其中 **1301 个与上游逐字节一致**（2026-11-22，同步到 `098de904`，按下面「取法」自己构建时）；`locale/` 2 个全部一致。⚠️ 若改成拿 **npm 包**来比（上游作者用 esbuild 0.25.x 构建），`lib/client/jet-hub.js` 会差 3 字节 —— 那时是「真逐字节 **1156** + 归一化 **1** = 一致 **1157**」，见下节。剩下 13 个（7 类改动；`lib/gemini-oauth.*`、`lib/backup.*`、`lib/baizhi-rpc.*` 各是一对 `.js` / `.d.ts`，`lib/jet-hub-rpc.js` 配 `lib/types.d.ts`；magicrew 的三处改动落在 `lib/magicrew-browser-login.js` + `.d.ts`（两类）、`lib/magicrew-local-browser.js` + `.d.ts`、`lib/leveldb-sstable.js` 上）：
+`lib/` 共 **1334** 个文件（含客户端 bundle `lib/client/jet-hub.js` 与 `lib/qoder-auth-wasm.wasm`），其中 **1321 个与上游逐字节一致**（2026-11-22，同步到 `098de904`，按下面「取法」自己构建时）；`locale/` 2 个全部一致。⚠️ 若改成拿 **npm 包**来比（上游作者用 esbuild 0.25.x 构建），`lib/client/jet-hub.js` 会差 3 字节 —— 那时是「真逐字节 **1156** + 归一化 **1** = 一致 **1157**」，见下节。剩下 13 个（7 类改动；`lib/gemini-oauth.*`、`lib/backup.*`、`lib/baizhi-rpc.*` 各是一对 `.js` / `.d.ts`，`lib/jet-hub-rpc.js` 配 `lib/types.d.ts`；magicrew 的三处改动落在 `lib/magicrew-browser-login.js` + `.d.ts`（两类）、`lib/magicrew-local-browser.js` + `.d.ts`、`lib/leveldb-sstable.js` 上）：
 
 | 差异 | 原因 |
 |---|---|
@@ -94,7 +94,7 @@ cd /path/to/magpie-Jet-Hub && node scripts/verify-vendor.mjs /tmp/up2
 
 它做四件事，任何一条不符就退出码 1 并逐条点名：
 
-1. `lib/` 逐文件 sha256：**文件数 1314**、**一致 1301** 必须与上面那张表对得上
+1. `lib/` 逐文件 sha256：**文件数 1334**、**一致 1321** 必须与上面那张表对得上
    （⚠ 自己构建时这 1157 就是真逐字节；拿 **npm 包**比时是 1156 + 1 个靠归一化算一致。
    `lib/client/jet-hub.js` 由 esbuild 打包，`__export` 的变量名取入口 basename ——
    本仓 `package.json` 声明的 `esbuild ^0.24.0` 给 `client_exports`，而上游作者发 npm 包
@@ -105,7 +105,7 @@ cd /path/to/magpie-Jet-Hub && node scripts/verify-vendor.mjs /tmp/up2
 2. 差异集合必须**恰好等于**补丁表那 13 个文件 —— 少一个 = 补丁被同步覆盖（静默故障），
    多一个 = 快照被别的动作污染过。**每个补丁文件还核 sha256 指纹**（`PATCH_SHA256`），
    所以「补丁文件被人手改」也抓得到 —— 有意改补丁时跑 `--print-hashes` 更新那 13 行；
-3. `lib/*.map` **656 个 / 4.50 MiB**、`locale/` 2 个逐字节一致（两个数都是断言，不是只打印）；
+3. `lib/*.map` **666 个 / 4.61 MiB**、`locale/` 2 个逐字节一致（两个数都是断言，不是只打印）；
 4. `vendor/package.json` 的版本号与上游同一次提交一致（并打出依赖树，换机漏依赖就
    表现成「控制台打不开」）。
 

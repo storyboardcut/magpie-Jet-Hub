@@ -151,11 +151,12 @@ export const DSH_PROVIDERS = [
   'cline',
   'codearts',
   'codely',
-  // ⚠️ 上游 2026-11-05 合并进来的 doubao（豆包）**刻意不接**：它只有账号 / 签到 /
-  // 积分（doubao-login / doubao-signin / doubao-credits），没有模型适配器 ——
-  // vendor 的 modelAdapters 表里没有它，接进来就是一张永远空着的卡（与两个路由组
-  // 同理）。哪天上游给它接了 adapter，tests/t-new-account 的「vendor 有的插件必须
-  // 有」会红着提醒把它加回来。
+  // 豆包（doubao）：上游 2026-11-22 补上了 modelAdapters 条目（`doubao: pruned('doubao',
+  // doubaoAdapter)`）与 `DOUBAO_FALLBACK_MODELS`（16 个模型：豆包 2.1 / DeepSeek V4 /
+  // Qwen 4 Max / Kimi K3 / GLM 5.3 等），从「只有签到」升级成真渠道。
+  // ⚠️ 之前刻意不接的理由（没有模型适配器）已不成立 —— t-new-account 的
+  //    「vendor 有的插件必须有」正是这么红着提醒的。
+  'doubao',
   'gemini',
   'lobsterai',
   'loomy',
@@ -195,6 +196,8 @@ const NAMES = {
   cline: 'Cline (开源)',
   codearts: 'CodeArts (华为云)',
   codely: 'Codely (Unity 团结引擎)',
+  // 豆包（字节）：上游 label / displayName 都是「豆包 (字节)」。
+  doubao: '豆包 (字节)',
   gemini: 'Gemini Code Assist (谷歌)',
   lobsterai: 'LobsterAI (有道)',
   loomy: 'Loomy (讯飞)',
@@ -274,6 +277,8 @@ const FALLBACK_MODELS = {
   'agnescode/kimi-k3': { name: 'AgnesCode · Kimi K3' },
   'agnescodeintl/kimi-k3': { name: 'AgnesCode 国际 · Kimi K3' },
   'codely/codely-flash': { name: 'Codely · Flash' },
+  // 豆包（doubao）：目录走远端 + `DOUBAO_FALLBACK_MODELS` 兜底。这里只放一条冷启动用的。
+  'doubao/0': { name: '豆包 · 快速' },
   'magicrew/deepseek-v4.1-flash': { name: 'Magicrew · DeepSeek V4.1 Flash' },
   'magicrewintl/deepseek-v4.1-flash': { name: 'MagiCrew 国际 · DeepSeek V4.1 Flash' },
   // 2026-11-09 上游新增（腾讯 Marvis）。上游**没有**模型目录端点（9 条候选全 404），

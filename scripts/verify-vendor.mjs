@@ -68,7 +68,7 @@ const PATCH_SHA256 = {
   'lib/backup.js': '53631bb8e2c0022b8794c638089a2013ffff7da0291c37e796c7f4a829e431ba',
   'lib/gemini-oauth.d.ts': 'cbc9c21e0b39ecedee4eaf3749bc81439cbe45f77550b1d6bea5b38d3e332c52',
   'lib/gemini-oauth.js': '0e78a047d0ea62f70d30e54e16196a9530abf0c77e60ae027e4fb93d17220320',
-  'lib/jet-hub-rpc.js': 'ef68de9c7bf326816f58789f4b25fc6ee170088c65cacd4381599f477adfa40d',
+  'lib/jet-hub-rpc.js': '36eae68f071d33bd2654e370510c01bab839dc895e7a2b7973c3295b5620621c',
   'lib/leveldb-sstable.js': '2d6954eccdb63a46ec68d0cf57fdd7ded2d31df5463d77e5569ed29457ddb853',
   'lib/magicrew-browser-login.d.ts': '5e7c3359790c77badfb1f9ebe9de6c4d26509075957dd7ac9813861ff5d7fc97',
   'lib/magicrew-browser-login.js': 'e81f252e2cea662c336d39122b3ec8d0094bd54ec04256c0ae48d67afdbf42c4',
@@ -89,7 +89,7 @@ const PATCH_SHA256 = {
  * **归一化后仍要求逐字节相等**（不是整份文件豁免），所以干净快照算「一致」、
  * 手改任何一位都会进 `differing` 判污染。
  */
-const EXPECT = { libFiles: 1314, identical: 1301, localeFiles: 2, maps: 656, mapMiB: '4.50' }
+const EXPECT = { libFiles: 1334, identical: 1321, localeFiles: 2, maps: 666, mapMiB: '4.61' }
 
 /**
  * 上游构建产物里**随工具链版本漂移**的文件 —— 既不是补丁，也不是污染。

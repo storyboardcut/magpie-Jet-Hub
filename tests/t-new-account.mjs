@@ -1101,11 +1101,7 @@ console.log('\noauth 方法形状：')
     //    两个路由组是**有意不接**的，放行它们，但放行名单必须写死在这里，
     //    否则将来真漏一家也会被当成路由组悄悄放过。
     const SKIP_ROUTE_GROUPS = new Set(['aggregate', 'jet-hub-auto'])
-    // doubao：上游 2026-11-24（a1bd112）落地网页端私有协议适配器，本仓尚未接入 ——
-    // 接入是**功能新增**（icons / NAMES / FALLBACK / 快照 / 扫码登录链路都要跟），
-    // 放行到下一轮，接入后必须删掉这一条。
-    const PENDING_PROVIDERS = new Set(['doubao'])
-    const missing = keys.filter((k) => !pluginSet.has(k) && !SKIP_ROUTE_GROUPS.has(k) && !PENDING_PROVIDERS.has(k))
+    const missing = keys.filter((k) => !pluginSet.has(k) && !SKIP_ROUTE_GROUPS.has(k))
     ok(missing.length === 0, `vendor 里这些 provider 插件没接：${missing.join(', ') || '无'}`)
     ok(
       keys.filter((k) => SKIP_ROUTE_GROUPS.has(k)).length === 2,
@@ -1181,6 +1177,7 @@ console.log('\noauth 方法形状：')
       const SNAPSHOT_MISSING = new Map([
         ['jet-hub-agnescode', '2026-11-22 上游新增两站，快照待宿主重载后重跑（重跑后删本条）'],
         ['jet-hub-agnescodeintl', '2026-11-22 上游新增两站，快照待宿主重载后重跑（重跑后删本条）'],
+        ['jet-hub-doubao', '2026-11-25 上游补上模型适配器后才接入，快照待宿主重载后重跑（重跑后删本条）'],
       ])
       const expectProvs = [...new Set(fbIds.map((id) => `jet-hub-${id.split('/')[0]}`))]
       ok(expectProvs.length >= 20, `FALLBACK 应覆盖 20+ 家，实际 ${expectProvs.length}`)
@@ -1232,8 +1229,8 @@ console.log('\noauth 方法形状：')
         ok(rawRows === snapNames.size,
           `scripts/snapshot-models.mjs 的 NAMES 有重复键（原始 ${rawRows} 行 / 去重后 ${snapNames.size} 个）`)
       }
-      ok(pluginNames.size === 31, `src/plugin.mjs 的 NAMES 应正好 31 家，实际 ${pluginNames.size}`)
-      ok(snapNames.size === 31, `scripts/snapshot-models.mjs 的 NAMES 应正好 31 家，实际 ${snapNames.size}`)
+      ok(pluginNames.size === 32, `src/plugin.mjs 的 NAMES 应正好 32 家，实际 ${pluginNames.size}`)
+      ok(snapNames.size === 32, `scripts/snapshot-models.mjs 的 NAMES 应正好 32 家，实际 ${snapNames.size}`)
       const nameDrift = []
       for (const [dsh, want] of pluginNames) {
         const magpieId = dsh === 'jet-hub-auto' ? 'jet-hub' : `jet-hub-${dsh}`

@@ -245,8 +245,6 @@ console.log(`  其中共享实现体的标签: ${fallThrough.length ? fallThroug
 //    promotion / trafficGuard / reasoningDefault / provider.closed 等 20 个方法；
 //    其中主 switch 新增的 17 个暂记入 DROPPED —— 都是 DSH 前端专属或依赖常驻
 //    调度器，见 DROPPED 表 2026-11-22 那一批的逐条理由）。
-// → 117（2026-11-24 同步上游 a1bd112：+3 = doubao.autoCheckin（doubao 本就不接入）、
-//    loginPreferences.get/setEnabled（登录页「自动打开浏览器」开关，控制台设置页待跟进））
 const EXPECTED_RPC_METHOD_COUNT = 117
 ok(methods.length === EXPECTED_RPC_METHOD_COUNT,
   `本体可调度方法总数应为 ${EXPECTED_RPC_METHOD_COUNT}，实际 ${methods.length}（上游加减方法时必须同步这个常量）`)
@@ -519,9 +517,11 @@ const DROPPED = new Map([
   ['resume.setEnabled', '同上（开关）'],
   ['resume.fireNow', '同上（立即续跑）'],
   ['resume.forget', '同上（遗忘钩子）'],
-  ['doubao.autoCheckin', 'doubao 每日自动签到开关：doubao 本就 channel:false 未接入（无模型适配器），开关无从挂起'],
-  ['loginPreferences.getEnabled', '登录授权页「自动打开浏览器」开关（上游 6922359 新增）：控制台设置页待跟进，暂记弃用'],
-  ['loginPreferences.setEnabled', '同上（写开关）'],
+
+  // ── 2026-11-25 同步上游 92cb1d0 新增 ──
+  ['doubao.autoCheckin', '豆包每日自动签到开关：与 modelscope / zcode 的同款，依赖常驻调度器；控制台用「一键领取」手动领'],
+  ['loginPreferences.getEnabled', '登录偏好读取（DSH 前端记住上次用的登录方式）：控制台没有这条 UI'],
+  ['loginPreferences.setEnabled', '登录偏好写入：同上'],
 ])
 
 // 交给别人接的 + 主动弃用的，合起来才是「控制台不该再接」的全集。

@@ -59,6 +59,9 @@ export const JetHubCodeartsPlugin = byId.get('jet-hub-codearts')
 /** 本体 `codely`（magpie id `jet-hub-codely`）。 */
 export const JetHubCodelyPlugin = byId.get('jet-hub-codely')
 
+/** 本体 `doubao`（magpie id `jet-hub-doubao`，豆包 (字节)，2026-11-22 上游补上模型适配器）。 */
+export const JetHubDoubaoPlugin = byId.get('jet-hub-doubao')
+
 /** 本体 `gemini`（magpie id `jet-hub-gemini`）。 */
 export const JetHubGeminiPlugin = byId.get('jet-hub-gemini')
 

@@ -1180,12 +1180,22 @@ export async function claimStreakExtras(credential, product, fetcher = fetch, de
     //    去重），失败不影响其它路径。
     try {
         const keep = await keepStreakActive(credential, product, fetcher);
+        /**
+         * ★★★ **失败必须如实标 `ok: false`**（GitHub issue #156）。
+         *
+         * 旧代码的两个分支**都写 `ok: true`** ⇒ 「保连胜一直没发出去」这件事在面板与
+         * 逐项结果里**看起来是成功的**。这正是「每轮 400 却零报错」的直接原因 ——
+         * 用户看面板是绿的，不会去查上游。
+         *
+         * ⚠️ 仍然 `markExpired`（那条腿是有价值的：401/403 说明凭据失效，要标出来），
+         *    只是**不再谎报成功**。
+         */
         if (keep.ok) {
             rows.push({ taskCode: '(保连胜)', ok: true, message: keep.message });
         }
         else {
             markExpired(keep.message);
-            rows.push({ taskCode: '(保连胜)', ok: true, message: keep.message });
+            rows.push({ taskCode: '(保连胜)', ok: false, message: keep.message });
         }
     }
     catch (error) {
@@ -1195,7 +1205,55 @@ export async function claimStreakExtras(credential, product, fetcher = fetch, de
 }
 export async function keepStreakActive(credential, product, fetcher = fetch) {
     const body = {
-        model: 'default-model',
+        /**
+         * ★★★ **必须用 `FAST_MODEL`，不能用 `'default-model'`**（GitHub issue #156）。
+         *
+         * ## 缺陷
+         *
+         * `'default-model'` 是 **workbuddy（国际版）的虚拟路由别名**（见 `canonical-models.ts`
+         * 对 `default-model` / `fast-model` 的归类）—— **中国版 buddy 没有这个模型**：
+         *
+         * ```
+         * 400  {"code":11102,"msg":"model [default-model] service info not found"}
+         * ```
+         *
+         * 而本函数**只给中国版 buddy 用**（唯一调用点是本文件的 `claimStreakExtras`），
+         * ⇒ **保连胜每轮必失败**，从 2026-11-01 接入生产以来**一次都没发出去过**。
+         *
+         * ## 为什么之前没人发现
+         *
+         * `claimStreakExtras` 的失败分支**也 `rows.push({ ok: true })`**（见下）⇒
+         * 面板与逐项结果里**看起来是成功的**。两处必须同修。
+         *
+         * ## 证据
+         *
+         * `:110` 的 `FAST_MODEL` 注释自己写着「通用对话链使用的**真实**模型 id
+         * （**非 `default-model` 虚拟路由别名**）」，且同文件另有 5 处用它
+         *（`:1444` / `:1998` / `:2016` / `:2029` / `:2114`）—— 唯独这里写死了别名。
+         */
+        /**
+         * ★★★ **必须用 `DEFAULT_CHAT_MODEL`（真实模型 id）**（GitHub issue #156）。
+         *
+         * ⚠️ **不要改成 `FAST_MODEL`** —— `fast-model` 与 `default-model` **同类**：
+         *    `canonical-models.ts` 的 `EXCLUDED_ALIASES` 注释写着
+         *    「workbuddy 的 `default-model` / **`fast-model`** / `balanced-model` /
+         *    `primary-model` / `deep-model` 是**服务端抽象路由**」—— **两者都不是真实模型**。
+         *    （我第一版就是改成 `FAST_MODEL`，被正向审计当场指出「论据自拆台」。）
+         *
+         * `DEFAULT_CHAT_MODEL`（`:107`）的注释是「通用对话链使用的**真实**模型 id
+         *（非 `default-model` 虚拟路由别名）」，且 `:2381` 的真实对话也在用它。
+         *
+         * ## 缺陷
+         *
+         * 旧代码写 `model: 'default-model'` ⇒ **中国版 buddy（`copilot.tencent.com`）没有它**：
+         *
+         * ```
+         * 400  {"code":11102,"msg":"model [default-model] service info not found"}
+         * ```
+         *
+         * ⇒ 保连胜**每轮必失败**，从 2026-11-01 接入生产以来一次都没发出去过。
+         */
+        model: DEFAULT_CHAT_MODEL,
         messages: [{ role: 'user', content: '你好' }],
         max_tokens: 8,
         stream: true,
@@ -3616,6 +3674,28 @@ export async function collectBuddyGrowth(credential, product, entry, budgetMs, r
         extraRows.push({ taskCode: '(连登链)', ok: true, message: extras.notes.join('；') });
     }
     const allResults = [...report.results, ...extraRows];
+    /**
+     * ★★★ **连登链的失败行必须计入 `failed`**（issue #156 后续一格）。
+     *
+     * ## 缺陷
+     *
+     * 旧代码只汇总任务阶段的失败（`report.failed`），**完全忽略 `extras.rows` 里的
+     * `ok: false`**：
+     *
+     * 实测（保连胜 400 场景）：
+     * `{"accountOk":true,"failed":0,"claimedCount":3,"claimedCredit":1900, tasks(保连胜)=false}`
+     *
+     * ⇒ **逐项是红的，顶行还是绿的**（客户端 `tone` 只看 `failed`，见 `jet-hub.js`）。
+     *
+     * 这与本文件的既有不变式**矛盾**：`:3488` 的注释写着
+     *「`ok:false` → failed 计数、提示染黄」—— 同一个文件里**两套同义判据**。
+     *
+     * ## 修法
+     *
+     * `failed: report.failed + extrasFailed`（`expired` 时仍归 0 —— 僵尸账号
+     * 「无需再管」，不把整条提示染成失败，那是既有语义）。
+     */
+    const extrasFailed = extraRows.filter((row) => !row.ok).length;
     const extraCredit = extras.credit;
     const extraClaimed = extras.claimedCount;
     return {
@@ -3624,7 +3704,7 @@ export async function collectBuddyGrowth(credential, product, entry, budgetMs, r
         ok: report.ok || expired,
         completed: report.completed,
         clientOnly: report.clientOnly,
-        failed: expired ? 0 : report.failed,
+        failed: expired ? 0 : report.failed + extrasFailed,
         claimedCount: report.claimedCount + extraClaimed,
         claimedCredit: report.claimedCredit + extraCredit,
         timedOut: report.timedOut,

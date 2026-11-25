@@ -163,6 +163,7 @@ const NAMES = {
   'jet-hub-cline':         ['Cline (开源)', '开源 AI 编程助手 Cline'],
   'jet-hub-codearts':      ['CodeArts (华为云)', '华为云 CodeArts（STS 临时凭据）'],
   'jet-hub-codely':        ['Codely (Unity 团结引擎)', 'Unity 团结引擎 Codely'],
+  'jet-hub-doubao':        ['豆包 (字节)', '字节豆包（2026-11-22 上游补上模型适配器）'],
   'jet-hub-gemini':        ['Gemini Code Assist (谷歌)', 'Google Gemini Code Assist'],
   'jet-hub-lobsterai':     ['LobsterAI (有道)', '网易有道 LobsterAI'],
   'jet-hub-loomy':         ['Loomy (讯飞)', '讯飞 Loomy'],

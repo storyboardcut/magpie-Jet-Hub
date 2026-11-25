@@ -487,6 +487,53 @@ export declare const MAX_CREDITS_STATUS_CONCURRENCY = 8;
  */
 export declare function resolveCreditsStatusConcurrency(raw: unknown, accountCount: number): number;
 /**
+ * ★★★ **校验「子代理专属模型 + 思考强度」是否真实可用**（2026-11-24）。
+ *
+ * ## 为什么必须是**导出的纯函数**（上游原话）
+ *
+ * > 「`subagent/model-validation` 的用例是**纯源码文本**，`if (false)` 注入仍 6/6 绿。」
+ *
+ * 我第一版把这段校验写在 `credits.window.set` 的 `case` 体里，用例只能在源码里
+ * 找字符串 —— 而 `if (false && …)` 短路后**字面量仍在**，断言照样绿。
+ *
+ * ⇒ 抽成本函数后，用例可以**直接调用**它并断言返回值。
+ *
+ * ## 校验三条（判据与 `credits.window.models` 下拉框**同源**）
+ *
+ * | 判据 | 来源 |
+ * |---|---|
+ * | 模型存在且**已启用** | `listEnabledModelIds()`（= `llm.listModels` − 黑名单）|
+ * | 思考档位属于该模型 | `listEffortsOf(model)` |
+ *
+ * ## ⚠️ 两条刻意的宽容（**不是漏洞**）
+ *
+ * | 情况 | 行为 | 理由 |
+ * |---|---|---|
+ * | 目录读不到（离线 / 适配器未就绪）| **跳过**存在性校验 | 宁可接受一个可能过期的 id，也不要让离线环境完全无法保存 |
+ * | 模型**没声明档位**（`efforts` 为空）| **跳过**档位校验 | 那种模型配 `reasoningEffort` 本来就不会被用（`select()` 忽略）|
+ *
+ * ⚠️ 注意「跳过」的表示是 **`undefined`**，不是 `[]` ——
+ *    `[]` 会让 `includes()` 恒 false ⇒ **离线时所有保存都被拒**（我第一版就写错过）。
+ *
+ * @returns `undefined` = 通过；字符串 = 拒绝原因（调用方回 `bad-request`）
+ */
+export declare function validateSubagentModelChoice(input: {
+    /** 用户配置的模型 id（调用方已保证是非空字符串）。 */
+    readonly model: string;
+    /** 用户配置的思考档位（可选）。 */
+    readonly reasoningEffort?: string;
+    /**
+     * 该渠道**已启用**的模型 id 列表。
+     * `undefined` = 目录读不到 ⇒ 跳过存在性校验。
+     */
+    readonly listEnabledModelIds: () => Promise<readonly string[] | undefined>;
+    /**
+     * 某模型的合法思考档位 id 列表。
+     * `undefined` = 解析失败 ⇒ 跳过档位校验。
+     */
+    readonly listEffortsOf: (modelId: string) => Promise<readonly string[] | undefined>;
+}): Promise<string | undefined>;
+/**
  * 逐账号收集签到状态（**有限并发**，默认 3；见函数体内 `concurrency` 的说明）。
  *
  * ⚠️ **原实现是纯串行**，注释写「顺序执行，避免并发触发风控」。2026-10-22 改成
