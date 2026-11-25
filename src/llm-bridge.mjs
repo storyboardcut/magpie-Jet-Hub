@@ -80,78 +80,8 @@ export function errorResponse(error) {
  * 模型没声明档位时返回空数组（**不是** `undefined`）：调用方据此决定根本不发
  * `variants`，与「不声明即未知」的口径一致。
  */
-/**
- * 中文档位名 → 规范名。上游 `effortView` 只认**英文 id**（`low` / `high` …），
- * 而豆包（doubao）的适配器声明的是「数字 id + 中文名」（`{id:'3',name:'低'}`）。
- *
- * 实测（2026-11-25）：把豆包那份原样喂给 `effortView` 会得到 `openai_efforts: []`
- * —— 于是模型列表右侧既没有「思考档位」下拉、`variants` 也不存在，而那个模型
- * 其实**能调档位**（上游请求体里就有 `reasoning_effort: '4'`）。
- *
- * 这里在**自己的代码里**先翻译一道，`vendor/` 不动（它是上游构建产物，改一个字节
- * 校验就红）。
- *
- * ⚠️ 只影响「翻译这一层」，真实下发仍用上游的**数字 id** —— `effortView` 会把
- * 原始 `efforts[]` 原样带回（它只是附加 `canonical` 字段），请求侧走的是
- * `normalizeReasoningEffort` / 本体网关，仍然按 id 匹配。
- */
-const CN_EFFORT_NAME = new Map([
-  ['最低', 'minimal'],
-  ['低', 'low'],
-  ['中', 'medium'],
-  ['中等', 'medium'],
-  ['高', 'high'],
-  ['极高', 'xhigh'],
-  ['更高', 'xhigh'],
-  ['最高', 'max'],
-  ['最大', 'max'],
-  ['关', 'none'],
-  ['关闭', 'none'],
-  ['不思考', 'none'],
-])
-
-/** 把一个档位 id 换成 `effortView` 认得的英文规范名；认不出就原样返回。 */
-function canonicalEffortId(id, name) {
-  const byName = CN_EFFORT_NAME.get(String(name ?? '').trim())
-  if (byName !== undefined) return byName
-  const raw = String(id ?? '')
-  // 已经是英文规范名（`low` / `xhigh` …）就原样
-  if (/^[a-z][a-z0-9_-]*$/i.test(raw)) return raw
-  return raw
-}
-
-/**
- * 把上游的 `reasoning.efforts` 归一成 `effortView` 能翻的形态。
- *
- * 只动 `id` 字段；`name` 保留原文（中文名在 magpie 的下拉里显示得更好）。
- */
-function effortsForView(efforts) {
-  if (!Array.isArray(efforts)) return efforts
-  return efforts.map((e) => {
-    if (e === null || typeof e !== 'object') return e
-    const id = e.id ?? e.key
-    const mapped = canonicalEffortId(id, e.name)
-    return mapped === id ? e : { ...e, id: mapped }
-  })
-}
-
-/**
- * 模型声明的推理档位，翻成 magpie 认的规范名。
- *
- * 为什么需要翻一遍：magpie 侧的推理强度下拉只认插件给的档位列表，而本体声明的
- * 是各家私有档位名（AStudio 的 `none`/`high`、CodeArts 的 `off`/`on`、豆包的
- * `3`/`4`/`5` + 中文名）。
- * `effortView` 已经把私有名翻成 8 个规范名（`openai_efforts`），请求填规范名
- * 之后由本体网关再翻回真实档位 —— 所以这里直接复用它，插件不再维护第二份映射。
- *
- * 模型没声明档位时返回空数组（**不是** `undefined`）：调用方据此决定根本不发
- * `variants`，与「不声明即未知」的口径一致。
- */
 export function openAiEfforts(info) {
-  const view = effortView(
-    effortsForView(info?.reasoning?.efforts),
-    canonicalEffortId(info?.reasoning?.defaultEffort, undefined),
-  )
+  const view = effortView(info?.reasoning?.efforts, info?.reasoning?.defaultEffort)
   return Array.isArray(view?.openai_efforts)
     ? view.openai_efforts.filter((e) => typeof e === 'string' && e !== '')
     : []
@@ -285,12 +215,7 @@ export async function modelsPayload(llm) {
 
   const effortViews = new Map()
   for (const [id, info] of infos) {
-    // ⚠️ 与 `openAiEfforts()` 同一道翻译：豆包那种「数字 id + 中文名」不翻就
-    // 得到空表，模型行上既没有档位下拉也没有 variants（2026-11-25）。
-    const view = effortView(
-      effortsForView(info?.reasoning?.efforts),
-      canonicalEffortId(info?.reasoning?.defaultEffort, undefined),
-    )
+    const view = effortView(info?.reasoning?.efforts, info?.reasoning?.defaultEffort)
     if (view !== undefined) effortViews.set(id, view)
   }
 
