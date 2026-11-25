@@ -342,12 +342,27 @@ function parseJsonBody(body) {
  */
 export function toUpstreamModel(model, dshProvider) {
   let m = String(model ?? '')
-  if (m.startsWith(`${dshProvider}/`)) return m
-  for (const p of PREFIXES) {
-    if (m.startsWith(`${p}/`)) {
-      m = m.slice(p.length + 1)
-      break
+  // ⚠️ 不能在这里直接 `return m` —— 带了自己前缀的输入（`doubao/DeepSeek-V4.1-Flash`）
+  // 同样要把别名换回真实数字 id，否则第一条捷径就把回代跳过去了（2026-11-25）。
+  if (!m.startsWith(`${dshProvider}/`)) {
+    for (const p of PREFIXES) {
+      if (m.startsWith(`${p}/`)) {
+        m = m.slice(p.length + 1)
+        break
+      }
     }
+  } else {
+    m = m.slice(dshProvider.length + 1)
+  }
+  // ⚠️ **数字 id 别名回代**（2026-11-25）：`modelsOfFull()` 把豆包那种纯数字
+  // 模型 id（`5101`）换成了可读 slug（`DeepSeek-V4.1-Flash`）给界面看，请求
+  // 出去时必须换回真实数字 id —— 否则上游收到 slug 会 `unknown model`。
+  // 只认别名表里确实存在的映射，查不到就原样返回（别家渠道的可读 id 不受影响）。
+  // 缓存项形状是 `{ fingerprint, map }`（见 `aliasesFor`），这里只读它的 `map`。
+  const entry = NUMERIC_ID_ALIASES.get(dshProvider)
+  if (entry !== undefined) {
+    const real = entry.map.get(m)
+    if (real !== undefined) return `${dshProvider}/${real}`
   }
   return `${dshProvider}/${m}`
 }
@@ -2645,7 +2660,7 @@ function refreshInBackground(container, log) {
       return container.refreshFullCatalog(DSH_PROVIDERS)
     })
     .then((rows) => {
-      if (Array.isArray(rows) && rows.length > 0) fullModels = rows
+      if (Array.isArray(rows) && rows.length > 0) { fullModels = rows; clearAliases() }
       // 全量目录那一趟也会用 `resolveModelInfo` 补能力（`model.list` 本身不带），
       // 所以这里要再同步一次 —— 只同步第一次的话落盘的就只有实时那几十条。
       absorbMeta(container)
@@ -2682,7 +2697,12 @@ function currentAll(container, log) {
     refreshInBackground(container, log)
     const seed = readCache()
     if (seed.live !== undefined) allModels = seed.live
-    if (seed.full !== undefined) fullModels = seed.full
+    if (seed.full !== undefined) {
+      fullModels = seed.full
+      // 磁盘缓存（重启后首帧走这里）：别名表是新进程的空表，必须让它按这份
+      // 目录重建 —— 否则第一屏的豆包模型还是数字 id（2026-11-25）。
+      clearAliases()
+    }
     if (seed.meta !== undefined) metaById = new Map(Object.entries(seed.meta))
   }
   return { live: allModels, full: fullModels }
@@ -2699,14 +2719,115 @@ async function liveAll(container, log) {
   return allModels ?? []
 }
 
-/** 全量目录里属于某个 provider 的那些，返回 magpie 的 models 形状。 */
-function modelsOfFull(dshProvider, rows) {
-  const out = {}
+/**
+ * 纯数字模型 id 的**上游 → magpie** 别名表（每 provider 一份，进程内缓存）。
+ *
+ * ## 为什么需要它（2026-11-25）
+ *
+ * 豆包（doubao）的上游目录里，模型 id 是**内部数字编号**（`5101` = DeepSeek V4.1
+ * Flash、`10598414850` = GLM 5.3 Flash），只有 `name` 字段是可读的。而 magpie 的
+ * 模型列表第一行**固定渲染 `<providerID>/<modelID>`** —— 于是界面上显示
+ * `jet-hub-doubao/5101`，跟别家（`jet-hub-trae/glm-5.3-flash`）比起来完全没法认。
+ *
+ * ## 为什么不做成写死的映射
+ *
+ * 用户明确要求「后续上游上新模型也要一样」。写死 14 条映射，上游每加一个模型
+ * 就漏一条、界面又变回数字。所以这里的判据是**形态**而不是名单：
+ * `^[0-9]+$` 的 bare id 才算数字 id，其余一律原样 —— 上游哪天把某个模型改成
+ * 可读 slug，它自动不参与改名；哪天又加五个数字 id 的新模型，它们自动被覆盖。
+ *
+ * ## 反向查找靠这份表，不靠猜
+ *
+ * `toUpstreamModel()` 只认这张表里**确实存在**的映射。别名撞车（两个不同数字 id
+ * 的 name 归一化后相同）时后者不覆盖前者 —— 前一个保留别名，后一个退回数字 id。
+ * 宁可有几个显示成数字，也不能把请求打到错的模型上。
+ *
+ * `provider → { fingerprint, map }`
+ *
+ * `fingerprint` 是「参与改名的行」的拼串（见 `aliasesFor`）—— 用它判缓存是否
+ * 还新鲜，目录一变就重建（2026-11-25 修：早先只按 provider 缓存，上游上新模型
+ * 时别名表还是旧的）。
+ */
+const NUMERIC_ID_ALIASES = new Map()
+
+/**
+ * 把模型名归一化成一个能当 id 用的 slug。
+ *
+ * 规则：ASCII 字母数字保留、连续的其它字符折成 `-`、去掉首尾 `-`。
+ * 中文名会全部折掉 ⇒ 返回空串 ⇒ 调用方退回数字 id（中文当 id 在 URL / 日志里
+ * 更难用，而且改它没有收益：显示名本来就在第二行）。
+ */
+function slugOfName(name) {
+  return String(name ?? '')
+    // ⚠️ 保留 `.`（`V4.1` 不能变成 `V4-1`，模型版本号里的点是有意义的）
+    // 与 `_`；其余非 ASCII 字母数字一律折成 `-`。
+    .replace(/[^A-Za-z0-9._]+/g, '-')
+    .replace(/^[-.]+|[-.]+$/g, '')
+    .slice(0, 64)
+}
+
+/**
+ * 这家的数字 id 别名表（按**目录内容指纹**缓存，目录变了就重建）。
+ *
+ * ⚠️⚠️ 早先版本只按 provider 缓存、靠外部 `clearAliases()` 失效 —— 结果
+ * 「上游上新一批数字 id 模型」时别名表还是旧的那份，新模型全退回数字 id
+ * （2026-11-25 测试 `t-numeric-model-alias` 第 3 节直接抓到的）。现在把
+ * 「参与改名的行」拼成指纹一起存，指纹一变就重建，不需要任何外部调用记得清。
+ *
+ * @param {string} dshProvider
+ * @param {Array<{id?: string, name?: string}>} rows 全量目录里属于该 provider 的行
+ * @returns {Map<string, string>} slug → 真实数字 id
+ */
+function aliasesFor(dshProvider, rows) {
   const prefix = `${dshProvider}/`
+  const numeric = []
   for (const row of rows ?? []) {
     const id = String(row?.id ?? '')
     if (!id.startsWith(prefix)) continue
     const bare = id.slice(prefix.length)
+    // 只处理「纯数字」的 id —— 这是豆包那种私有协议的形态。
+    if (!/^\d+$/.test(bare)) continue
+    numeric.push([bare, String(row?.name ?? '')])
+  }
+  const fingerprint = `${dshProvider}\u0000${numeric.map(([id, n]) => `${id}=${n}`).join('\u0001')}`
+
+  const cached = NUMERIC_ID_ALIASES.get(dshProvider)
+  if (cached !== undefined && cached.fingerprint === fingerprint) return cached.map
+
+  const map = new Map()
+  const used = new Set()
+  for (const [bare, name] of numeric) {
+    const slug = slugOfName(name)
+    if (slug === '' || used.has(slug)) continue
+    used.add(slug)
+    map.set(slug, bare)
+  }
+  // 空表也存（带指纹），下次同内容直接命中。
+  NUMERIC_ID_ALIASES.set(dshProvider, { fingerprint, map })
+  return map
+}
+
+/** 全量目录刷新后清掉别名表，让下次重建（上游可能改了 name）。 */
+function clearAliases() {
+  NUMERIC_ID_ALIASES.clear()
+}
+
+/** 全量目录里属于某个 provider 的那些，返回 magpie 的 models 形状。 */
+function modelsOfFull(dshProvider, rows) {
+  const out = {}
+  const prefix = `${dshProvider}/`
+  const aliases = aliasesFor(dshProvider, rows)
+  // 反向：真实数字 id → 别名（构造期一次，逐行查比每次遍历 Map 快）
+  const aliasOfReal = new Map()
+  for (const [slug, real] of aliases) aliasOfReal.set(real, slug)
+
+  for (const row of rows ?? []) {
+    const id = String(row?.id ?? '')
+    if (!id.startsWith(prefix)) continue
+    const realBare = id.slice(prefix.length)
+    // ⚠️ 显示用的 id 可能是**别名**（数字 id 换成可读 slug），但 `metaOf()`
+    //    与 `MODEL_PRICES` 必须按**真实 id** 查 —— 上游的元数据是按数字 id 存的。
+    const bare = aliasOfReal.get(realBare) ?? realBare
     const base = row?.name ?? bare
     // 已在上游关掉的模型照样列出（用户要全量），但把状态写进名字，
     // 免得选中后打不通却不知道为什么。
@@ -2715,7 +2836,7 @@ function modelsOfFull(dshProvider, rows) {
     // `deepseek-flash` 这类 id 根本匹配不到兜底表，「未申报 output」的渠道
     // 一直是漏的。展示名走 `def.name`。
     const label = row?.disabled === true ? `${base} · 已在 Jet Hub 关闭` : base
-    out[bare] = modelEntry(bare, label === bare ? undefined : { name: label }, metaOf(id), MODEL_PRICES[bare])
+    out[bare] = modelEntry(bare, label === bare ? undefined : { name: label }, metaOf(id), MODEL_PRICES[realBare])
   }
   return out
 }
