@@ -7,7 +7,7 @@
 | 项 | 值 |
 |---|---|
 | 上游源码仓库 | [`iJetLi/deepseek-harness-codearts`](https://gitee.com/iJetLi/deepseek-harness-codearts)（**主仓**；GitHub 上的 [`iJetLi/dsh-providers-hub`](https://github.com/iJetLi/dsh-providers-hub) 是镜像 —— 2026-11-22 实测两边同头在 `098de90`，镜像不再落后） |
-| 代码对应 commit | `92cb1d0`（2026-11-25；本地跟进同步，上游 43a00cdf→92cb1d0 共 71 个提交） |
+| 代码对应 commit | `9ebd3e7d`（2026-11-25；本地跟进同步） |
 | 版本号 | `0.2.1-rc.5`（上游 `package.json` 与本次构建同一次提交） |
 | 许可 | MIT，`Copyright (c) 2026 Jet` —— 全文见 [`vendor/LICENSE`](../vendor/LICENSE) |
 
