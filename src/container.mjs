@@ -203,6 +203,42 @@ export class JetHubContainer {
   }
 
   /**
+   * 按 **账号 id** 取该账号的凭据原文（`credentialTextOf` 的「指定账号」版本）。
+   *
+   * ## 为什么需要（2026-11-26）
+   *
+   * 插件的 MiniMax 工具暴露了 `account` 参数（`minimax-code#5ec12fd7` 这种），
+   * 但早先的实现只按 **provider** 取令牌 —— 也就是「该 provider 第一条 enabled
+   * 账号」，`account` 传什么都一样（实测传乱写的字符串也照样成功）。
+   *
+   * 用户的真实场景：第一个号额度用完时，要能指定另一个号继续跑。这需要
+   * 「按 id 取那个号的令牌」，`credentialTextOf(provider)` 做不到。
+   *
+   * @param {string} provider 本体 provider id（`minimax` / `minimaxintl`）
+   * @param {string} accountId 账号池里的 `id`（如 `minimax-5ec12fd7`）
+   * @returns {string | undefined} 凭据原文（JSON 字符串），找不到时 undefined
+   */
+  credentialTextOfAccount(provider, accountId) {
+    if (typeof accountId !== 'string' || accountId === '') return undefined
+    let accounts
+    try {
+      accounts = this.seam?.pool?.readAccounts?.() ?? this._readAccountsFromState()
+    } catch {
+      accounts = this._readAccountsFromState()
+    }
+    const hit = accounts.find((a) => a?.id === accountId && a?.provider === provider && a?.enabled !== false)
+    if (hit === undefined) return undefined
+    let text
+    try {
+      text = readFileSync(this.credentialFile(), 'utf8')
+    } catch {
+      return undefined
+    }
+    const raw = parseRefs(text).get(hit.credentialRef)
+    return raw === undefined || raw === '' ? undefined : raw
+  }
+
+  /**
    * 不启动容器时读账号池：`<dshHome>/jet-hub/state.json` 的 `accounts`。
    *
    * 与本体 `account-pool.js` 读的是同一个文件、同一份结构（数组，或按 provider

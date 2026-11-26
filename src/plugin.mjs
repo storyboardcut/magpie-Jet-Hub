@@ -2955,14 +2955,24 @@ export function makePlugin(dshProvider) {
      *
      * @returns {Promise<{access: string} | {error: string}>}
      */
-    const minimaxAccess = async (provider) => {
+    const minimaxAccess = async (provider, accountId) => {
       let raw
       try {
-        raw = container.credentialTextOf(provider)
+        // 指定账号就走「按 id 取」（2026-11-26：工具的 account 参数曾经被完全忽略）
+        raw = typeof accountId === 'string' && accountId !== ''
+          ? container.credentialTextOfAccount(provider, accountId)
+          : container.credentialTextOf(provider)
       } catch (e) {
         return { error: `读取 ${provider} 账号凭据失败：${e?.message ?? e}` }
       }
       if (raw === undefined) {
+        // 指定了账号却读不到 ⇒ 说清是「那个号」有问题，别让人以为整家都没账号
+        if (typeof accountId === 'string' && accountId !== '') {
+          return {
+            error: `${NAMES[provider] ?? provider} 的账号 ${accountId} 不可用 —— `
+              + '它可能已被停用 / 删除，或凭据已不在 ~/.dsh/.credentials.yaml 里。',
+          }
+        }
         return {
           error: `${NAMES[provider] ?? provider} 还没有可用账号 —— 先在 magpie 的 Providers 页把这家「连接」上，`
             + '或到 DSH 的 Jet Hub 里登录该账号。',
