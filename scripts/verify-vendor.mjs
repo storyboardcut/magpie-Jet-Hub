@@ -1,4 +1,4 @@
-// 核 `vendor/` 是否仍是「上游构建产物 + 13 个补丁文件」——把 docs/vendor.md 的
+// 核 `vendor/` 是否仍是「上游构建产物 + 14 个补丁文件」——把 docs/vendor.md 的
 // 「怎么自己核一遍」那堆 shell 收成一条命令。
 //
 //   node scripts/verify-vendor.mjs /path/to/upstream     # upstream = 跑过 npm install 的上游仓库根
@@ -24,7 +24,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url))
 const VENDOR = path.join(HERE, '..', 'vendor')
 
 /**
- * 本仓库对上游构建产物做的**全部**改动（docs/vendor.md 的差异表，7 类 / 13 个文件）。
+ * 本仓库对上游构建产物做的**全部**改动（docs/vendor.md 的差异表，8 类 / 14 个文件）。
  *
  * 这份清单是**契约**，不是「已知差异」的备注：同步上游后如果少了其中任何一个，
  * 说明补丁被整片覆盖了（静默故障）；如果多出一个，说明快照被别的动作污染过。
@@ -40,13 +40,14 @@ const PATCH_FILES = [
   'lib/magicrew-browser-login.js',      // ② IndexedDB 读取 + ③ 一次性 profile 回收
   'lib/magicrew-local-browser.d.ts',    // ② 声明跟上实现（leveldbTextFor 三参 / idbCredentialsIn）
   'lib/magicrew-local-browser.js',      // ② IndexedDB 读取
+  'lib/minimax-credits.js',             // ⑧ 余额 page_size 1000→100（上游 issue #162，防 400 后回退只拿 20 条）
   'lib/types.d.ts',                     // ⑥ RpcModelSetDisabledManyRequest.closeProvider
   'lib/baizhi-rpc.js',                  // ⑦ 新增 baizhi.setSession（补网页登录态）
   'lib/baizhi-rpc.d.ts',                // ⑦ 同上，类型声明
 ].sort()
 
 /**
- * 13 个补丁文件**内容**的 sha256 指纹。
+ * 14 个补丁文件**内容**的 sha256 指纹。
  *
  * ## ⚠️⚠️ 为什么光有「差异集合 = 补丁表」还不够（2026-11-10 对抗审查 P1-4）
  *
@@ -61,7 +62,7 @@ const PATCH_FILES = [
  * ## 怎么更新
  *
  * 有意改补丁时跑 `node scripts/verify-vendor.mjs --print-hashes`，把它打印的
- * 13 行原样贴回来。**不要**为了让脚本变绿就跳过校验 —— 那等于把这条门禁拆掉。
+ * 14 行原样贴回来。**不要**为了让脚本变绿就跳过校验 —— 那等于把这条门禁拆掉。
  */
 const PATCH_SHA256 = {
   'lib/backup.d.ts': '0f1169ae4beca9f5757a348e65385705deac52ea6226c3f9843eba9fff1b83b0',
@@ -74,6 +75,7 @@ const PATCH_SHA256 = {
   'lib/magicrew-browser-login.js': 'e81f252e2cea662c336d39122b3ec8d0094bd54ec04256c0ae48d67afdbf42c4',
   'lib/magicrew-local-browser.d.ts': '7198b59278585fa3da5afbc68a23fa917575cc17a8ec096b2da3a31da3a30758',
   'lib/magicrew-local-browser.js': '6adc02a9116267151dd1c0f5fccb56e714637160512b5c27b44e33493143b435',
+  'lib/minimax-credits.js': '8d82f75ea7f0dce2666fda77bad25d9bfb24a73f902ac1fb147403772abc71e5',
   'lib/types.d.ts': 'e5f6b2c771562454d6babddc1481ea30a68faf8d24655da5de400682ecf8d5e9',
   'lib/baizhi-rpc.js': 'a7aeabc1e0b156b29d42520b41bad9b696546a0d4e293782925a559f7d3ec9de',
   'lib/baizhi-rpc.d.ts': '87628eedb198b8f8e15f6d00854c3bc8fd909de52484506c9983701f81b39b42',
@@ -151,7 +153,7 @@ function walk(root) {
 }
 
 function main() {
-  // `--print-hashes`：有意改补丁后，把这里打印的 13 行原样贴回 PATCH_SHA256。
+  // `--print-hashes`：有意改补丁后，把这里打印的 14 行原样贴回 PATCH_SHA256。
   if (process.argv.includes('--print-hashes')) {
     for (const f of PATCH_FILES) console.log(`  '${f}': '${sha256(path.join(VENDOR, f))}',`)
     process.exit(0)
