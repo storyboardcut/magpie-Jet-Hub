@@ -52,7 +52,9 @@ console.log('--- 1) credits.balances 的回包形状 ---')
   // 2026-11-22 同步 098de904：对象里多了一段「磁盘缓存首帧标记」的 JSDoc 与可选的
   // `fromCache` 摊入，窗口改由 `resolveCreditWindow` 按渠道解析 —— 两者都排到了
   // 起点之后 ~1000 字符处，截取窗口从 400 放宽到 1400。
-  const tail = rpcSrc.slice(iValue, iValue + 1400)
+  // 2026-11-27 同步 8d451218：上游在 windowDays 之前又插了「两个窗口必须成对回传」
+  // 与「积分阈值」两段长注释（实测 +900 字符），窗口再放宽到 3200。
+  const tail = rpcSrc.slice(iValue, iValue + 3200)
   ok(
     /\{\s*accounts:\s*values,/.test(tail),
     'value 是以 `{ accounts: values,` 开头的对象（不是裸的 values）',

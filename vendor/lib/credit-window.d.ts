@@ -65,6 +65,18 @@ export interface ResolvedCreditWindow {
      * 静默改写用户输入是本仓库明令禁止的形态（用户会以为保存失败或行为异常）。
      */
     readonly clamped: boolean;
+    /**
+     * ★★★ **临期档的积分下限**（2026-11-27 用户需求）。
+     *
+     * 临期剩余 **≤ 该值** ⇒ 不算临期 ⇒ 降级按「短期」排队。
+     *
+     * ⚠️ **恒为数字**（`undefined` 已归一成 `0`）：调用方（`buddyBalanceTier`）
+     * 直接用它做 `> floor` 判据即可，不必每处再判 `undefined`。
+     * ⚠️ `0` = 关闭 ⇒ `> 0` 与加这个功能之前**逐字节相同**（零回归）。
+     */
+    readonly imminentFloor: number;
+    /** ★★★ **短期档的积分下限**（同上）。`0` = 关闭。 */
+    readonly expiringFloor: number;
 }
 /**
  * 「短期窗口」的**上限**（天）：100 年。
@@ -89,7 +101,6 @@ export declare const MAX_CREDIT_WINDOW_DAYS = 36500;
 export type CreditWindowReader = (provider: string) => CreditWindowSetting | undefined;
 /**
  * 把「可能不完整的 pool」安全包成 {@link CreditWindowReader}。
- *
  * ## ⚠️ 为什么需要它（真实回归，2026-11-19）
  *
  * `AccountPool.creditWindow` 是**新加的方法**。三类调用方可能拿不到它：

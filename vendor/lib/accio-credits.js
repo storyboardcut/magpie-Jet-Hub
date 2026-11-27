@@ -113,6 +113,38 @@ function readRecord(value) {
         ? value
         : undefined;
 }
+/**
+ * ★★★ **读 `activeTeam`**（issue #177，2026-11-27）。
+ *
+ * ## 三态，别压成两态
+ *
+ * | 响应 | 含义 | 返回 |
+ * |---|---|---|
+ * | 字段缺失 / `null` | **个人空间**（本项目实测这台机器就是如此）| `null` |
+ * | `{teamId: "..."}` | **团队空间** ⇒ 所有请求必须带 `x-team-id` | `{teamId, …}` |
+ * | 有对象但 `teamId` 不是非空串 | **畸形** | `null`（**降级到个人空间**，不编造 id）|
+ *
+ * ⚠️ **`teamId` 必须是非空字符串**才算团队：把 `''` 当成团队会把 `x-team-id: `
+ * 发出去（空头值），比不发更糟 —— 上游可能据此判「无效团队」而不是回落到个人。
+ *
+ * ⚠️ 另外两个字段（`teamName` / `role`）只为**展示**，缺了不影响请求。
+ */
+function readAccioActiveTeam(source) {
+    const raw = source.activeTeam;
+    if (typeof raw !== 'object' || raw === null)
+        return null;
+    const record = raw;
+    const teamId = typeof record.teamId === 'string' ? record.teamId.trim() : '';
+    if (teamId === '')
+        return null;
+    const teamName = typeof record.teamName === 'string' && record.teamName !== '' ? record.teamName : undefined;
+    const role = typeof record.role === 'string' && record.role !== '' ? record.role : undefined;
+    return {
+        teamId,
+        ...(teamName === undefined ? {} : { teamName }),
+        ...(role === undefined ? {} : { role }),
+    };
+}
 /** 读成字符串；非字符串返回空串。 */
 function readString(source, key) {
     const value = source[key];
@@ -221,6 +253,37 @@ async function callAccioEndpoint(options) {
     const token = accioAccessToken(options.credential);
     const base = `${ACCIO.gatewayBaseUrl}${options.path}`;
     const headers = { Accept: 'application/json' };
+    /**
+     * ★★★ **团队身份**（issue #177，2026-11-27）。
+     *
+     * ⚠️ 这**不违反**本文件上方「只读端点不把推理端那些头顺手带过来」的纪律 ——
+     *    那条纪律针对的是 `utdid` / `version` / `appKey` / `sgcookie`（实测不需要）。
+     *    `x-team-id` 不同：**官方对「除 publicCatalog 外的所有出站请求」都注入它**，
+     *    带着它才是「对齐官方」，不带才是「少发」。
+     *
+     * 证据：issue #177 作者逆向 `app.asar`（偏移 75632621 的 `yo()` + 75663647 的
+     * `addRequestInterceptor`），并在本机 `%APPDATA%\Accio
+  emembered-accounts.json`
+     * 的 `auth.activeTeam` 里找到同一份数据。
+     *
+     * ⚠️ 无值 ⇒ **不发这个头**（与官方拦截器「空值即删」的语义一致）；
+     *    个人空间账号的行为因此与改动前**逐字节相同**。
+     */
+    const teamId = typeof options.credential.teamId === 'string' ? options.credential.teamId.trim() : '';
+    if (teamId !== '')
+        headers['x-team-id'] = teamId;
+    const routeRegion = typeof options.credential.routeRegion === 'string' ? options.credential.routeRegion.trim() : '';
+    if (routeRegion !== '')
+        headers['x-accio-route-region'] = routeRegion;
+    /**
+     * ★ `x-package-region: GLOBAL`（issue #177 实测有效：国际站模型可见性）。
+     * 与团队额度无关（那是服务端会话状态），但**这一条真能多出 9 个 GPT**。
+     */
+    // ★ 两个站都发（`cn` => `CN`）：官方 `aa()` 的归一化白名单就是 `CN|GLOBAL`。
+    if (options.credential.region === 'global')
+        headers['x-package-region'] = 'GLOBAL';
+    else if (options.credential.region === 'cn')
+        headers['x-package-region'] = 'CN';
     let url = base;
     let body;
     if (options.method === 'POST') {
@@ -339,6 +402,12 @@ export async function fetchAccioUserInfo(credential, options = {}) {
         userId: readString(data, 'userId'),
         userName: readString(data, 'userName'),
         routeRegion: readString(data, 'routeRegion'),
+        /**
+         * ★ **必须解析**（issue #177）：少了它，团队空间的账号永远只看到个人额度。
+         * ⚠️ 形状按官方 `activeTeam: {teamId, teamName, role} | null`；
+         *    `null` 是**合法值**（个人空间），不能被当成「解析失败」。
+         */
+        activeTeam: readAccioActiveTeam(data),
         userLevel: readString(data, 'userLevel'),
         maskedMobile: readString(data, 'maskedMobile'),
     };
@@ -449,6 +518,44 @@ function makeAccioPackage(name, total, used, remaining, cycleEndTime) {
  *
  * 反之，**查到了就是查到了**：桶全为 0 时如实返回 `total: 0`（那才是「额度已用光」），
  * 与上面三条 `null` 严格区分。
+ */
+/**
+ * ★★★ **团队额度（team space）本仓刻意不支持 —— 这是查证过的结论，不是 TODO**（issue #177，2026-11-27）
+ *
+ * ## 一句话
+ *
+ * **accIO 的团队额度只存在于「网页会话 cookie」那条链路上，而本仓是无头进程、只有 OAuth token。**
+ *
+ * ## 证据链（三条独立来源，全部实测）
+ *
+ * | 来源 | 事实 |
+ * |---|---|
+ * | 报障者用**团队账号**实读 | 网页版 `GET /gateway/subscription/current?teamId=<id>` ⇒ `{"type":"TEAM","total":8000,…}` |
+ * | 同上，去掉 cookie 再试 | ① `Authorization: Bearer <token>` ⇒ **401 `login required`**；② `?accessToken=<token>` ⇒ **401 `login required`** |
+ * | 同一枚 token 打本仓现在用的端点 | `phoenix-gw/api/entitlement/currentSubscription` ⇒ **200 `FREE/520`** |
+ *
+ * ⇒ **token 是有效的**（否则第二条会是 401 而不是 200）。**是 `/gateway/*` 这套链路只认 cookie。**
+ *
+ * ## ⚠️⚠️ 两条**已被证伪**的错路 —— 不要再试
+ *
+ * 1. **`x-team-id` 请求头**：官方客户端确实注入它（`app.asar` 偏移 75632621 的 `yo()`），
+ *    但报障者实测「加 `x-team-id: <teamId>` ⇒ 响应**逐字不变**（仍 FREE/520）」。
+ *    **空间是服务端会话态**（`POST /space/switch`），不是请求头。
+ * 2. **`userinfo.activeTeam`**：官方 schema 里有 `{teamId,teamName,role}|null`，
+ *    但**团队账号下实测仍是 `null`**；且 `phoenix-gw` 的 `userinfo` 在
+ *    基线 / `+x-team-id` / `+sgcookie+region` **三种形态下响应逐字相同、全是 null**。
+ *    字段清单里**没有** space / tenantId / orgId / spaceType / teams / teamId。
+ *
+ * ## 唯一可能的出路（未做，成本需另评估）
+ *
+ * 官方**桌面客户端**走 `localhost:4097` 本机网关 + **Basic Auth**，那套会话来自客户端登录态。
+ * 要支持团队额度就得**复用本机 Accio 客户端的会话** ——
+ * 这与本仓「纯 OAuth、无浏览器依赖」的架构**分叉**，需要单独决策，不是顺手能加的。
+ *
+ * ## 仍然**有效**的那条修复
+ *
+ * `x-package-region`（见 `accioHeaders`）：报障者真机确认「目录从 16 条 → **30 条**，
+ * 含 GPT 6 Luna / GPT 5.6 Luna / Claude / Gemini」。**那条是会改 wire 的，与本函数无关。**
  */
 export async function fetchAccioBalanceDetailed(credential, options = {}) {
     const fetcher = options.fetcher ?? fetch;

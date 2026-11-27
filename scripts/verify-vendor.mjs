@@ -1,4 +1,4 @@
-// 核 `vendor/` 是否仍是「上游构建产物 + 14 个补丁文件」——把 docs/vendor.md 的
+// 核 `vendor/` 是否仍是「上游构建产物 + 12 个补丁文件」——把 docs/vendor.md 的
 // 「怎么自己核一遍」那堆 shell 收成一条命令。
 //
 //   node scripts/verify-vendor.mjs /path/to/upstream     # upstream = 跑过 npm install 的上游仓库根
@@ -24,30 +24,28 @@ const HERE = path.dirname(fileURLToPath(import.meta.url))
 const VENDOR = path.join(HERE, '..', 'vendor')
 
 /**
- * 本仓库对上游构建产物做的**全部**改动（docs/vendor.md 的差异表，8 类 / 14 个文件）。
+ * 本仓库对上游构建产物做的**全部**改动（docs/vendor.md 的差异表，6 类 / 12 个文件）。
  *
  * 这份清单是**契约**，不是「已知差异」的备注：同步上游后如果少了其中任何一个，
  * 说明补丁被整片覆盖了（静默故障）；如果多出一个，说明快照被别的动作污染过。
  */
 const PATCH_FILES = [
-  'lib/backup.d.ts',                    // ④ keepDisabledModels 的类型
-  'lib/backup.js',                      // ④ keepDisabledModels 的实现
-  'lib/gemini-oauth.d.ts',              // ① 两个默认 client 常量拆两段
-  'lib/gemini-oauth.js',                // ① 同上
-  'lib/jet-hub-rpc.js',                 // ⑤ 黑名单覆盖全量即补设供应商关闭意图
-  'lib/leveldb-sstable.js',             // ⑤ WAL 分片重组（Snappy 压缩块）
-  'lib/magicrew-browser-login.d.ts',    // ② 声明跟上实现（CDP_CREDENTIAL_EXPRESSION）
-  'lib/magicrew-browser-login.js',      // ② IndexedDB 读取 + ③ 一次性 profile 回收
-  'lib/magicrew-local-browser.d.ts',    // ② 声明跟上实现（leveldbTextFor 三参 / idbCredentialsIn）
-  'lib/magicrew-local-browser.js',      // ② IndexedDB 读取
-  'lib/minimax-credits.js',             // ⑧ 余额 page_size 1000→100（上游 issue #162，防 400 后回退只拿 20 条）
-  'lib/types.d.ts',                     // ⑥ RpcModelSetDisabledManyRequest.closeProvider
-  'lib/baizhi-rpc.js',                  // ⑦ 新增 baizhi.setSession（补网页登录态）
-  'lib/baizhi-rpc.d.ts',                // ⑦ 同上，类型声明
+  'lib/backup.d.ts',
+  'lib/backup.js',
+  'lib/baizhi-rpc.d.ts',
+  'lib/baizhi-rpc.js',
+  'lib/gemini-oauth.d.ts',
+  'lib/gemini-oauth.js',
+  'lib/leveldb-sstable.js',
+  'lib/magicrew-browser-login.d.ts',
+  'lib/magicrew-browser-login.js',
+  'lib/magicrew-local-browser.d.ts',
+  'lib/magicrew-local-browser.js',
+  'lib/types.d.ts',
 ].sort()
 
 /**
- * 14 个补丁文件**内容**的 sha256 指纹。
+ * 12 个补丁文件**内容**的 sha256 指纹。
  *
  * ## ⚠️⚠️ 为什么光有「差异集合 = 补丁表」还不够（2026-11-10 对抗审查 P1-4）
  *
@@ -62,23 +60,21 @@ const PATCH_FILES = [
  * ## 怎么更新
  *
  * 有意改补丁时跑 `node scripts/verify-vendor.mjs --print-hashes`，把它打印的
- * 14 行原样贴回来。**不要**为了让脚本变绿就跳过校验 —— 那等于把这条门禁拆掉。
+ * 12 行原样贴回来。**不要**为了让脚本变绿就跳过校验 —— 那等于把这条门禁拆掉。
  */
 const PATCH_SHA256 = {
-  'lib/backup.d.ts': '0f1169ae4beca9f5757a348e65385705deac52ea6226c3f9843eba9fff1b83b0',
-  'lib/backup.js': '53631bb8e2c0022b8794c638089a2013ffff7da0291c37e796c7f4a829e431ba',
+  'lib/backup.d.ts': '06aa0a514779b76b1948c6c3eff20546ac9ea8186db42e79b55ecdeba3d180ca',
+  'lib/backup.js': '9e5e9cc76d1b63e207c8462196d92019623d84c7929f0eab607d064b9ed7fea5',
+  'lib/baizhi-rpc.d.ts': 'b2d01953f729a84412020be2d6158327b9f04e94bccb4715b6c82cf75b03c97d',
+  'lib/baizhi-rpc.js': 'a7aeabc1e0b156b29d42520b41bad9b696546a0d4e293782925a559f7d3ec9de',
   'lib/gemini-oauth.d.ts': 'cbc9c21e0b39ecedee4eaf3749bc81439cbe45f77550b1d6bea5b38d3e332c52',
   'lib/gemini-oauth.js': '0e78a047d0ea62f70d30e54e16196a9530abf0c77e60ae027e4fb93d17220320',
-  'lib/jet-hub-rpc.js': '36eae68f071d33bd2654e370510c01bab839dc895e7a2b7973c3295b5620621c',
-  'lib/leveldb-sstable.js': '2d6954eccdb63a46ec68d0cf57fdd7ded2d31df5463d77e5569ed29457ddb853',
-  'lib/magicrew-browser-login.d.ts': '5e7c3359790c77badfb1f9ebe9de6c4d26509075957dd7ac9813861ff5d7fc97',
-  'lib/magicrew-browser-login.js': 'e81f252e2cea662c336d39122b3ec8d0094bd54ec04256c0ae48d67afdbf42c4',
-  'lib/magicrew-local-browser.d.ts': '7198b59278585fa3da5afbc68a23fa917575cc17a8ec096b2da3a31da3a30758',
-  'lib/magicrew-local-browser.js': '6adc02a9116267151dd1c0f5fccb56e714637160512b5c27b44e33493143b435',
-  'lib/minimax-credits.js': '8d82f75ea7f0dce2666fda77bad25d9bfb24a73f902ac1fb147403772abc71e5',
-  'lib/types.d.ts': 'e5f6b2c771562454d6babddc1481ea30a68faf8d24655da5de400682ecf8d5e9',
-  'lib/baizhi-rpc.js': 'a7aeabc1e0b156b29d42520b41bad9b696546a0d4e293782925a559f7d3ec9de',
-  'lib/baizhi-rpc.d.ts': '87628eedb198b8f8e15f6d00854c3bc8fd909de52484506c9983701f81b39b42',
+  'lib/leveldb-sstable.js': '901063c0fd53d615734bac02861d420a1695ec824ff955d08f9a9712b72ad64d',
+  'lib/magicrew-browser-login.d.ts': 'bdaa7b5e4639a5abbb6148f48e3d60f5ea4351c79484d50568b8ac7ca727d1ae',
+  'lib/magicrew-browser-login.js': '8c32fa9924e7def9df995358185d4f7d23b41681db1423d3b2a4c9c03978ce10',
+  'lib/magicrew-local-browser.d.ts': '718e67cbd81cc4c297ce24a4a1a5405d65bad469baa8cf5d0a038ef88441e275',
+  'lib/magicrew-local-browser.js': '0fd446dc918d8bab34a4338abf054684e0958ac22089600081182217fe84af6b',
+  'lib/types.d.ts': '1fee8bde8d0d5faeed3015b80ff53f1641fd8b9fc31843fde26903d9d56f3ceb',
 }
 
 /**
@@ -91,7 +87,7 @@ const PATCH_SHA256 = {
  * **归一化后仍要求逐字节相等**（不是整份文件豁免），所以干净快照算「一致」、
  * 手改任何一位都会进 `differing` 判污染。
  */
-const EXPECT = { libFiles: 1334, identical: 1321, localeFiles: 2, maps: 666, mapMiB: '4.61' }
+const EXPECT = { libFiles: 1351, identical: 1339, localeFiles: 2, maps: 674, mapMiB: '4.63' }
 
 /**
  * 上游构建产物里**随工具链版本漂移**的文件 —— 既不是补丁，也不是污染。
@@ -153,7 +149,7 @@ function walk(root) {
 }
 
 function main() {
-  // `--print-hashes`：有意改补丁后，把这里打印的 14 行原样贴回 PATCH_SHA256。
+  // `--print-hashes`：有意改补丁后，把这里打印的 12 行原样贴回 PATCH_SHA256。
   if (process.argv.includes('--print-hashes')) {
     for (const f of PATCH_FILES) console.log(`  '${f}': '${sha256(path.join(VENDOR, f))}',`)
     process.exit(0)

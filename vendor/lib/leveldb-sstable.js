@@ -500,6 +500,7 @@ export function readWalRecords(input) {
     // 循环最后停在「FIRST 之后没有 LAST」= 尾部半写：残留分片丢弃，已解析的保留。
     return records.length > 0 ? records : undefined;
 }
+
 /**
  * 把 Chromium `Local Storage` 的 value 解成字符串。
  *

@@ -610,6 +610,8 @@ export async function fetchMinimaxCreditBalanceDetailed(credential, fetcher = fe
      * 差额 1181.43 分来自被截断的 3 个包（400 + 400 + 381.43）。
      * `minimax`（国内站）一侧同为 24 条、默认只回 20 条。
      *
+     * ## 为什么取 1000
+     *
      * ## ⚠️ 为什么是 **100** 而不是 1000（GitHub issue #162，2026-11-25 用户报障）
      *
      * `d12448ae`（#141 的修复）取的是 **1000**，理由是「每天一个包 ⇒ 1000 天 ≈ 2.7 年

@@ -1,6 +1,7 @@
+import { parseCredentialJson } from './credential-json.js';
 import { credentialRef } from '@deepseek-ai/dsh-credentials';
 import { createJetHubStore, clearRejectionLayer, DEFAULT_PANEL_ENTRY, sanitizeSubagentRotation, isValidResetAtMs, MAX_DATE_MS, mergeLegacyLoomyLock, sanitizeAccounts, sanitizeDisabledModels, sanitizeMinimaxXff, sanitizePanelEntry, sanitizePermanentLocks, sanitizePreferredRotation, sanitizeProviderClosed, sanitizeCreditWindows, sanitizeStrictManualOrder, withAllowed, withoutAllowed } from './jet-hub-store.js';
-import { markSubagentEnded, nextSubagentSlot, pinSubagentAccount, recordSubagentAssignment, sanitizeSubagentAssignments, setUserPickedAccount } from './subagent-rotation.js';
+import { markSubagentEnded, nextSubagentSlot, recordSubagentAssignment, sanitizeSubagentAssignments, } from './subagent-rotation.js';
 import { createPermanentLockStore } from './permanent-lock-store.js';
 import { normalizeOpencodeGeneration } from './opencode-auth.js';
 import { maskProxyPassword } from './proxy-mask.js';
@@ -481,6 +482,48 @@ export class AccountPool {
     subagentAssignmentCache = {};
     preferredRotationCache = {};
     /**
+     * ★★★ **每个会话「实际在用」的账号 id**（2026-11-25 新增，**纯内存、不落盘**）。
+     *
+     * ## 它解决什么（用户原话）
+     *
+     * > 「子代理轮换起点策略的参考对象，是主代理**实际在使用的帐号**，
+     * >   而不是下拉框选择的，这样可以统一默认状态跟用户选择的，
+     * >   都是实际当时在使用的帐号」
+     *
+     * ⇒ 主代理下拉框选位次 5，但位次 5 的号临期烧完、实际已切到位次 6 ——
+     *   子代理的起点策略必须参照**位次 6**，不是下拉框的位次 5。
+     *
+     * ## ⚠️ 为什么必须按**会话**分组（`provider → sessionId → accountId`）
+     *
+     * 同时有多个主代理会话时，各自用的号不同。若只记 `provider → accountId`
+     * （Qoder 的 `activeQoderAccountId` 就是那种形态），子代理会参照
+     * **最后一个发过请求的会话**的账号，而不是**它自己父会话**的账号
+     * ⇒ 多会话并发时串味。
+     *
+     * ## ⚠️ 为什么不落盘
+     *
+     * 这是**瞬时运行态**：插件重启后「当前在用哪个号」已经无从得知
+     * （下一个请求会重新选）。落盘一份过期值反而会让子代理参照错号。
+     * ⇒ 重启后表为空，消费方按 `preferredRotationFor`（下拉框位次）回落
+     *   —— 与用户确认过的降级路径一致。
+     */
+    activeAccountCache = {};
+    /**
+     * ★★★ **无档位 provider 的子代理起点位次**（2026-11-25，**纯内存**）。
+     *
+     * ## 为什么不能复用 `preferredRotationCache`
+     *
+     * `preferredRotationCache` 的条目**必须带档位**（`sanitizePreferredRotation`
+     * 会丢弃无档位条目），而 ACCIO / ASTUDIO / MAGICREW 这类纯 key 池**没有档位**。
+     * 硬塞进去只有两种结局：被 sanitize 丢掉（等于没写），或让主代理的
+     * `tierStillHeld` 判据拿到脏数据。
+     *
+     * ⇒ 子代理在无档位 provider 上用这张独立表：**只记位次，不记档位**。
+     *
+     * ⚠️ 纯内存：重启后丢失 ⇒ 下次请求重新按策略算一次（可接受，
+     * 与 `activeAccountCache` 同一取向）。
+     */
+    subagentStartPositionCache = {}; /**
      * 「面板入口」的进程内副本：Jet Hub 的唯一入口位置（两个取值互斥）。
      *
      * 缺键语义是 `'sidebar'`「仅侧栏」（与 {@link nativeWebSearchCache} 同一方向）：
@@ -1389,8 +1432,32 @@ export class AccountPool {
             return;
         const windowDays = setting?.windowDays;
         const imminentDays = setting?.imminentDays;
-        const validWindow = typeof windowDays === 'number' && Number.isFinite(windowDays) && windowDays >= 0;
-        const validImminent = typeof imminentDays === 'number' && Number.isFinite(imminentDays) && imminentDays >= 0;
+        /**
+         * ★★★ **两个积分阈值**（2026-11-27 用户需求）。
+         *
+         * ⚠️⚠️ **`0` 是合法值**（= 关掉阈值），与 `windowDays` 的 0 语义一致。
+         * 它**不能**被归一成 `undefined` —— 那会让用户**永远关不掉**已设的阈值。
+         */
+        const imminentFloor = setting?.imminentFloor;
+        const expiringFloor = setting?.expiringFloor;
+        const isNonNeg = (v) => typeof v === 'number' && Number.isFinite(v) && v >= 0;
+        const validWindow = isNonNeg(windowDays);
+        const validImminent = isNonNeg(imminentDays);
+        const validImminentFloor = isNonNeg(imminentFloor);
+        const validExpiringFloor = isNonNeg(expiringFloor);
+        /**
+         * ⚠️ **本次载荷是否提到任何一个字段**。
+         *
+         * 这就是「恢复默认」与「只配了一部分」的分界线：
+         * 四个字段**全部缺席** ⇒ 恢复默认（删键）；
+         * 任一在场 ⇒ 合并写入（缺席的字段从 `existing` 继承）。
+         *
+         * ⚠️⚠️ **两个阈值必须参与这条判据**（2026-11-27 上游审计 D1）：
+         * 漏了它们 ⇒ `setCreditWindow({ imminentFloor: 20 })` 会被判成
+         * 「恢复默认」⇒ **整条删键** ⇒ 阈值**根本存不进去**。
+         */
+        const anyFieldPresent = validWindow || validImminent
+            || validImminentFloor || validExpiringFloor;
         const next = { ...this.creditWindowCache };
         /**
          * ⚠️⚠️ **必须保留 `subagent`**（2026-11-24 用户报障，真缺陷）。
@@ -1407,21 +1474,23 @@ export class AccountPool {
          * 「两个天数都没传」时传 `undefined`）⇒ 走下面的 `delete next[provider]`
          * ⇒ **整条记录被删** ⇒ 窗口天数回到内置默认。
          *
-         * 更隐蔽的是：删掉之后 `subagent` 也没了，但子代理设置是**同一次请求**
-         * 刚写进去的 —— 两个功能互相踩。
-         *
-         * ## 修法
-         *
-         * 删键前先看**是否还有 `subagent`**：有就只删两个天数、保留 subagent；
-         * 都没有才整条删（避免留下空对象噪音）。
+         * ⚠️ 同样适用于两个阈值 —— 只改子代理设置时不能把阈值一起抹掉。
+         */
+        /**
+         * ⚠️ **必须在 `next` 拷贝之后读**（`subagent-creditwindow-preserve.spec.ts` 有守卫）：
+         * 在拷贝之前读会拿到旧表引用，后续 `next[provider] = …` 替换后读到的是过期值。
          */
         const existingSubagent = next[provider]?.subagent;
-        if (!validWindow && !validImminent) {
+        /**
+         * 同上：本次写入要「继承」的**已有窗口设置**（缺席字段从这里取）。
+         */
+        const existing = next[provider];
+        if (!anyFieldPresent) {
             /**
-             * 「恢复默认」语义：删掉两个天数。
+             * 「恢复默认」语义：删掉窗口相关的四个字段。
              *
              * ⚠️ 但**不能**连 `subagent` 一起删 —— 那是另一个功能的设置，
-             * 用户点「恢复默认」针对的是窗口天数。
+             * 用户点「恢复默认」针对的是窗口天数与阈值。
              */
             if (existingSubagent !== undefined) {
                 next[provider] = { subagent: existingSubagent };
@@ -1434,9 +1503,24 @@ export class AccountPool {
             }
         }
         else {
+            /**
+             * ⚠️ **缺席的字段从 `existing` 继承**（合并语义）。
+             *
+             * | 本次载荷 | 结果 |
+             * |---|---|
+             * | 只给 `imminentFloor` | 保留原有窗口天数 / 另一阈值 / 子代理 |
+             * | 给 `imminentFloor: 0` | **写入 0**（= 关掉阈值，不是「不动」）|
+             * | 给 `windowDays: 7` + `imminentFloor: 20` | 两者都写 |
+             *
+             * ⚠️ 继承时也要判「原值是否合法」：手改坏 `state.json` 写进 `-1`
+             * 不该继续传播。
+             */
+            const keep = (key, ok, next_) => ok ? { [key]: next_ } : (isNonNeg(existing?.[key]) ? { [key]: existing[key] } : {});
             next[provider] = {
-                ...(validWindow ? { windowDays: windowDays } : {}),
-                ...(validImminent ? { imminentDays: imminentDays } : {}),
+                ...keep('windowDays', validWindow, windowDays),
+                ...keep('imminentDays', validImminent, imminentDays),
+                ...keep('imminentFloor', validImminentFloor, imminentFloor),
+                ...keep('expiringFloor', validExpiringFloor, expiringFloor),
                 /**
                  * ⚠️ **必须带上 `subagent`**（与上面同一个「整体替换」陷阱）。
                  *
@@ -1483,18 +1567,33 @@ export class AccountPool {
         if (clean === undefined) {
             if (current === undefined || current.subagent === undefined)
                 return;
+            /**
+             * ★★★ **清除子代理时，窗口相关的四个字段必须原样保留**（2026-11-27）。
+             *
+             * ⚠️⚠️ **两个阈值也必须在这里**（上游审计 D1）：
+             * 漏了它们 ⇒ 用户「清除子代理设置」会**静默抹掉积分阈值**
+             * （面板上阈值还在显示，但实际已失效 —— 下次选号不降级）。
+             * 与本文件另一处「改窗口天数抹掉子代理」是**同一个整体替换陷阱**。
+             */
             const rest = {
                 ...(current.windowDays === undefined ? {} : { windowDays: current.windowDays }),
                 ...(current.imminentDays === undefined ? {} : { imminentDays: current.imminentDays }),
+                ...(current.imminentFloor === undefined ? {} : { imminentFloor: current.imminentFloor }),
+                ...(current.expiringFloor === undefined ? {} : { expiringFloor: current.expiringFloor }),
             };
             /**
              * ⚠️ 去掉 subagent 后若**只剩空对象**，整条删键
              *（否则会留下一个永不消费的噪音 provider 键）。
+             *
+             * ⚠️ **四个字段全缺席才算空** —— 只配了阈值的 provider 不能在这里被删掉。
              */
-            if (rest.windowDays === undefined && rest.imminentDays === undefined)
+            if (rest.windowDays === undefined && rest.imminentDays === undefined
+                && rest.imminentFloor === undefined && rest.expiringFloor === undefined) {
                 delete next[provider];
-            else
+            }
+            else {
                 next[provider] = rest;
+            }
         }
         else {
             next[provider] = { ...(current ?? {}), subagent: clean };
@@ -1633,67 +1732,6 @@ export class AccountPool {
             await this.queueStoreSave();
     }
     /**
-     * ★★★ **钉住某子代理的账号**（2026-11-24 用户要求：拉起时定死）。
-     *
-     * ## 为什么要钉
-     *
-     * > 「我是希望『拉起时定死，只有该号不可用才换』，
-     * >   这样可以保证子代理的缓存命中率高，如果频繁换帐号，缓存命中率就低了。」
-     *
-     * 原理：prompt cache 按（账号 + 模型 + 前缀）命中 ⇒ 换号即缓存全失效。
-     *
-     * ⚠️ **同步更新缓存**（与 `recordSubagentStart` 同纪律）：调用方紧接着
-     * 还要读它，不能等落盘。
-     *
-     * @returns `true` = 有新值（同值返回 `false`，调用方据此跳过重复写盘）
-     */
-    async pinSubagentAccount(provider, sessionId, accountId) {
-        this.ensureLoaded();
-        if (provider.length === 0 || sessionId.length === 0 || accountId.length === 0)
-            return false;
-        const current = this.subagentAssignmentCache[provider];
-        if (current === undefined)
-            return false;
-        const next = pinSubagentAccount(current, sessionId, accountId, Date.now());
-        /** ⚠️ 同值 ⇒ 原对象返回 ⇒ 这里判等跳过落盘（避免每发请求都写一次磁盘）。 */
-        if (next === current)
-            return false;
-        this.subagentAssignmentCache = { ...this.subagentAssignmentCache, [provider]: next };
-        if (this.store.kind !== 'memory')
-            await this.queueStoreSave();
-        return true;
-    }
-    /**
-     * ★★★ **记录用户手动选的账号**（2026-11-24 用户定 B 方案）。
-     *
-     * 语义：用户在该子代理对话页面手动选起点时，写这个字段；
-     * 它的优先级**高于** `pinnedAccountId`（见 `credential-resolver.ts`）。
-     *
-     * ⚠️ 主代理没有分配记录 ⇒ `setUserPickedAccount` 原样返回 ⇒ 无副作用。
-     *
-     * ⚠️ **同步更新缓存**（与 `pinSubagentAccount` 同纪律）：调用方紧接着
-     * 还要读它（回传 `selected`），不能等落盘。
-     *
-     * @param accountId - `undefined` = 清除手动选择（回落到 pin）
-     * @returns `true` = 有新值（同值返回 `false`，调用方据此跳过重复写盘）
-     */
-    async setUserPickedAccount(provider, sessionId, accountId) {
-        this.ensureLoaded();
-        if (provider.length === 0 || sessionId.length === 0)
-            return false;
-        const current = this.subagentAssignmentCache[provider];
-        if (current === undefined)
-            return false;
-        const next = setUserPickedAccount(current, sessionId, accountId, Date.now());
-        /** ⚠️ 同值 ⇒ 原对象返回 ⇒ 跳过落盘。 */
-        if (next === current)
-            return false;
-        this.subagentAssignmentCache = { ...this.subagentAssignmentCache, [provider]: next };
-        if (this.store.kind !== 'memory')
-            await this.queueStoreSave();
-        return true;
-    }
-    /**
      * ★ **轮换起点选定那一刻的档位**（S6，2026-11-20）。
      *
      * 返回 `undefined` **只有一种含义**：该会话没配起点。
@@ -1830,6 +1868,101 @@ export class AccountPool {
             return;
         }
         await this.queueStoreSave();
+    }
+    /**
+     * ★★★ **读某会话「实际在用」的账号 id**（2026-11-25，纯内存）。
+     *
+     * ## 它解决什么
+     *
+     * 子代理的起点策略要参照「主代理**实际在用**的号」，不是「下拉框选的位次」：
+     * 下拉框选位次 5，但位次 5 的临期烧完后主代理已切到位次 6 ⇒
+     * 子代理必须参照**位次 6**。
+     *
+     * ## ⚠️ 三条语义
+     *
+     * | 情况 | 返回 |
+     * |---|---|
+     * | 该会话发过请求 | 当时选中的账号 id |
+     * | 该会话**没发过**／插件刚重启 | `undefined`（消费方回落 `preferredRotationFor`）|
+     * | `sessionId` 为空 | `undefined`（空串会让「默认」与「某会话」撞成同一个键）|
+     *
+     * ⚠️ **每次现读，不缓存**（与 `preferredRotationFor` 同款）：值随每个请求变化。
+     */
+    activeAccountOf(provider, sessionId) {
+        if (provider.length === 0)
+            return undefined;
+        if (typeof sessionId !== 'string' || sessionId.length === 0)
+            return undefined;
+        return this.activeAccountCache[provider]?.[sessionId];
+    }
+    /**
+     * ★★★ **记某会话「实际在用」的账号 id**（2026-11-25，纯内存，**不落盘**）。
+     *
+     * ⚠️ **由 `credential-resolver` 在每次选号成功后自动调用** ——
+     * 不是由各 provider 各自配置（那样 24 处调用点必然会漏，实测已有 7 处没有
+     * `reportAccount`）。这是「子代理设置对**全部** provider 生效」的基础设施。
+     *
+     * @param accountId - `undefined` = 清空该会话的记录（本次没选中任何号）。
+     *   ⚠️ 不清空会让过期 id 一直留着，子代理参照一个**早已不用的号**。
+     */
+    setActiveAccount(provider, sessionId, accountId) {
+        if (provider.length === 0)
+            return;
+        if (typeof sessionId !== 'string' || sessionId.length === 0)
+            return;
+        const current = this.activeAccountCache[provider];
+        if (accountId === undefined) {
+            if (current === undefined || current[sessionId] === undefined)
+                return;
+            const nextSessions = { ...current };
+            delete nextSessions[sessionId];
+            if (Object.keys(nextSessions).length === 0) {
+                const nextAll = { ...this.activeAccountCache };
+                delete nextAll[provider];
+                this.activeAccountCache = nextAll;
+            }
+            else {
+                this.activeAccountCache = { ...this.activeAccountCache, [provider]: nextSessions };
+            }
+            return;
+        }
+        if (accountId.length === 0)
+            return;
+        /** ⚠️ 同值 ⇒ 返回（避免每发请求都重建对象）。 */
+        if (current?.[sessionId] === accountId)
+            return;
+        this.activeAccountCache = {
+            ...this.activeAccountCache,
+            [provider]: { ...(current ?? {}), [sessionId]: accountId },
+        };
+    }
+    /**
+     * ★★★ **写无档位 provider 的子代理起点位次**（2026-11-25，纯内存）。
+     *
+     * 见 {@link subagentStartPositionCache} 的注释 —— 与
+     * `setPreferredRotation` 的差别只有一条：**不要求档位**。
+     */
+    setSubagentStartPosition(provider, sessionId, position) {
+        if (provider.length === 0 || sessionId.length === 0)
+            return;
+        if (!Number.isInteger(position) || position < 1)
+            return;
+        const current = this.subagentStartPositionCache[provider];
+        /** ⚠️ 同值 ⇒ 返回（避免每发请求都重建对象）。 */
+        if (current?.[sessionId] === position)
+            return;
+        this.subagentStartPositionCache = {
+            ...this.subagentStartPositionCache,
+            [provider]: { ...(current ?? {}), [sessionId]: position },
+        };
+    }
+    /** 读回 {@link setSubagentStartPosition} 写下的位次（1-based）。 */
+    subagentStartPositionOf(provider, sessionId) {
+        if (provider.length === 0)
+            return undefined;
+        if (typeof sessionId !== 'string' || sessionId.length === 0)
+            return undefined;
+        return this.subagentStartPositionCache[provider]?.[sessionId];
     }
     /**
      * 「面板入口」的当前取值：Jet Hub 的唯一入口位置。
@@ -2527,7 +2660,7 @@ export class AccountPool {
                 const resolved = await this.ctx.credentials.resolve(credentialRef(entry.credentialRef));
                 if (resolved === undefined)
                     continue;
-                const parsed = JSON.parse(resolved.value);
+                const parsed = parseCredentialJson(resolved.value);
                 domain = typeof parsed.domain === 'string' ? parsed.domain : '';
             }
             catch {
@@ -2894,7 +3027,7 @@ export class AccountPool {
             const resolved = await this.ctx.credentials.resolve(credentialRef(refName));
             if (!resolved)
                 return undefined;
-            const parsed = JSON.parse(resolved.value);
+            const parsed = parseCredentialJson(resolved.value);
             return typeof parsed === 'object' && parsed !== null ? parsed : undefined;
         }
         catch {
@@ -3372,7 +3505,7 @@ export class AccountPool {
                 continue;
             }
             try {
-                const credential = JSON.parse(resolved.value);
+                const credential = parseCredentialJson(resolved.value);
                 if (failures.length > 0) {
                     this.ctx.logger?.warn?.(`[jet-hub] ${failures.length} 个 ${provider} 账号不可用，已跳过：${failures.join('; ')}`);
                 }
@@ -3877,6 +4010,30 @@ export class AccountPool {
     geminiProxyFor(accountId) {
         const entry = this.readAccounts().find(a => a.id === accountId);
         return asProxyText(entry?.geminiProxy);
+    }
+    /**
+     * ★★★ **该 provider 任一账号已配的 Gemini 代理**（2026-11-26，issue #170）。
+     *
+     * ## 为什么需要它
+     *
+     * Gemini（Cloud Code Assist）全链路在墙外 ⇒ 没有代理时 `fetch failed`。
+     * 而 `geminiProxyFor(accountId)` **只按 id 查已落池的账号** ——
+     * **登录新账号时那个 id 刚生成、还没落池** ⇒ 恒返回空 ⇒ 恒裸 `fetch`
+     * ⇒ **必需翻墙的用户永远登录不上**（鸡生蛋）。
+     *
+     * ⇒ 这条只给**登录路径**用：新账号还没有「自己的出口」，借用同类账号的出口
+     *   比直接裸连合理得多。**推理 / 探测路径绝不走它** —— 那里 `accountId` 是
+     *   确定的，借别人的出口会让「这个号到底从哪出网」失真。
+     *
+     * @returns 第一个配了 `geminiProxy` 的账号的代理文本；一个都没有 ⇒ `''`
+     */
+    geminiProxyForAny() {
+        for (const account of this.readAccounts()) {
+            const raw = asProxyText(account.geminiProxy);
+            if (raw.trim().length > 0)
+                return raw;
+        }
+        return '';
     }
     /**
      * 设置/清除某 **qoder** 账号的出口代理（真实报障 2026-10-21）。

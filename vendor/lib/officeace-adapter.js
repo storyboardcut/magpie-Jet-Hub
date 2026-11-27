@@ -124,9 +124,13 @@ export class OfficeAceAdapter extends LlmAdapter {
      * ⚠️ 刷新失败（refresh_token 已消费）返回旧凭据 —— 推理可能仍可用
      *（MaaS Basic 凭据与 STS 生命周期不同步）；真正失效由 stream 的 401 报错兜底。
      */
-    async resolveCredential() {
+    /**
+     * @param sessionId 当前会话 id（**可选**；来自 `GenerateOptions.sessionId`）。
+     *   ⚠️ 只用于**子代理起点分配**，不参与凭据解析本身。
+     */
+    async resolveCredential(sessionId) {
         if (this.options.credentialProvider)
-            return this.options.credentialProvider();
+            return this.options.credentialProvider(sessionId);
         let credential = await readOfficeAceCredential();
         if (credential !== undefined && isExpiring(credential)) {
             credential = (await refreshStoredCredential().catch(() => undefined)) ?? credential;
@@ -324,7 +328,14 @@ export class OfficeAceAdapter extends LlmAdapter {
     /** ⚠️ 单参数 `stream(options)`（`LlmAdapter` 基类契约）。 */
     async *stream(options) {
         const model = options.model;
-        const credential = await this.resolveCredential();
+        /**
+         * ★ **把会话 id 传下去**（2026-11-25）：子代理起点分配要用它。
+         *
+         * ⚠️ `GenerateOptions.sessionId` 是基类已有的字段（codearts / budddy 等
+         *    都用它做「轮换起点」）—— 本家此前**只用来查起点、没用它做子代理分配**。
+         * `undefined` 时（网关流量 / 单测）行为逐字节不变。
+         */
+        const credential = await this.resolveCredential(options.sessionId);
         if (credential === undefined) {
             throw new Error('未找到 OfficeAce 凭据：请启动 OfficeAce 并登录华为云账号（凭据缓存于本机 Redis），'
                 + '或确认 Redis 6399 与 Windows 凭据管理器条目可读');
@@ -544,7 +555,7 @@ export class OfficeAceAdapter extends LlmAdapter {
                 if ((response.status === 401 || credentialRejected) && this.options.refresh !== undefined) {
                     const before = basicAuthFingerprint(credential);
                     await this.options.refresh().catch(() => undefined);
-                    const renewed = await this.resolveCredential();
+                    const renewed = await this.resolveCredential(options.sessionId);
                     if (renewed === undefined) {
                         renewal = 'unreadable';
                     }

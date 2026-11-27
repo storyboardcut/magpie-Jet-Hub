@@ -1,6 +1,6 @@
 # `vendor/` 的来源、许可与差异
 
-`vendor/` 是上游插件本体的一份**构建产物快照**，随本仓库分发。它不是本仓库的代码，也不在本仓库修改行为 —— 只有下面列出的 14 个文件因规避扫描器、补一个读取路径或补一处「全关即意图」而改过写法。
+`vendor/` 是上游插件本体的一份**构建产物快照**，随本仓库分发。它不是本仓库的代码，也不在本仓库修改行为 —— 只有下面列出的 12 个文件因规避扫描器、补一个读取路径或补一处「全关即意图」而改过写法。
 
 ## 来源
 
@@ -41,7 +41,7 @@ cp -r lib locale package.json LICENSE /path/to/magpie-Jet-Hub/vendor/
 
 ## 与上游构建产物的差异
 
-`lib/` 共 **1334** 个文件（含客户端 bundle `lib/client/jet-hub.js` 与 `lib/qoder-auth-wasm.wasm`），其中 **1321 个与上游逐字节一致**（2026-11-22，同步到 `098de904`，按下面「取法」自己构建时）；`locale/` 2 个全部一致。⚠️ 若改成拿 **npm 包**来比（上游作者用 esbuild 0.25.x 构建），`lib/client/jet-hub.js` 会差 3 字节 —— 那时是「真逐字节 **1156** + 归一化 **1** = 一致 **1157**」，见下节。剩下 14 个（8 类改动；`lib/gemini-oauth.*`、`lib/backup.*`、`lib/baizhi-rpc.*` 各是一对 `.js` / `.d.ts`，`lib/jet-hub-rpc.js` 配 `lib/types.d.ts`；magicrew 的三处改动落在 `lib/magicrew-browser-login.js` + `.d.ts`（两类）、`lib/magicrew-local-browser.js` + `.d.ts`、`lib/leveldb-sstable.js` 上；第 8 类是单独的 `lib/minimax-credits.js`）：
+`lib/` 共 **1351** 个文件（含客户端 bundle `lib/client/jet-hub.js` 与 `lib/qoder-auth-wasm.wasm`），其中 **1339 个与上游逐字节一致**（2026-11-27，同步到 `8d451218`，按下面「取法」自己构建时）；`locale/` 2 个全部一致。⚠️ 若改成拿 **npm 包**来比（上游作者用 esbuild 0.25.x 构建），`lib/client/jet-hub.js` 会差 3 字节 —— 那时是「真逐字节 **1156** + 归一化 **1** = 一致 **1157**」，见下节。剩下 12 个（6 类改动；`lib/gemini-oauth.*`、`lib/backup.*`、`lib/baizhi-rpc.*` 各是一对 `.js` / `.d.ts`，`lib/jet-hub-rpc.js` 配 `lib/types.d.ts`；magicrew 的三处改动落在 `lib/magicrew-browser-login.js` + `.d.ts`（两类）、`lib/magicrew-local-browser.js` + `.d.ts`、`lib/leveldb-sstable.js` 上）：
 
 | 差异 | 原因 |
 |---|---|
@@ -55,12 +55,11 @@ cp -r lib locale package.json LICENSE /path/to/magpie-Jet-Hub/vendor/
 | `lib/jet-hub-rpc.js` 的 `model.setDisabledMany` 在「黑名单覆盖该家全量目录」时补设供应商关闭意图 | 上游两个关闭入口语义不一致：`model.setAllDisabled`（「关闭全部」）默认 `closeProvider = true`，而 `model.setDisabledMany` **从不落意图**。magpie 的 provider 弹窗把「全部未勾选」原样传成 `modelIds`（实测 34 个全传）⇒ 黑名单 = 该家全量 ⇒ 下次打开弹窗 34 个模型全带「已在 Jet Hub 关闭」⇒ 勾选仍是 0 ⇒ 再保存还是全传，**死循环**，清空一次保存一次又满。补设意图后「打开供应商」能一把全恢复，配置里只多一个布尔而不是 34 条死键。判据用 `fullCatalogIds` 的**纯净并集**（`readableCatalogIds` 的 `known` 已把黑名单并进去，拿它判恒真）；目录不完整时不猜。未覆盖全量时一个字节都不变 |
 | `lib/baizhi-rpc.js` 与 `.d.ts` 新增 `baizhi.setSession` | 只把控制台网页登录态（`sl-session` + `baizhi_session`）写进凭据的 `session_cookie`，**不碰账号条目** —— 与 `monkeycode.setSession` 逐条同型。上游只有 `addAccount` / `setApiKey`（都要人手工抄 `sk-`），而积分 / 签到**只认 cookie**（拿 Key 打 `/api/v1/user/*` 恒 401），浏览器登录又必须在**可见**窗口里真人操作 ⇒ 装在服务器上时「贴 Key 能建号、但积分永远读不出来」。语义照抄 monkeycode：字段缺失 = 只读不写（回报 `hasSession`）、传空串 = 清除会话；写入是**合并**（`{...previous}` 再覆盖 `session_cookie`），丢了 `access_token` 账号就再也发不出消息 |
 | `lib/types.d.ts` 的 `RpcModelSetDisabledManyRequest` 多一个 `closeProvider` 选项 | 与上一条配套的类型声明。`setDisabledMany` 新增的 `closeProvider` 与 `setAllDisabled` 同名同义（默认 `true`）；不补类型的话，调用方按 `.d.ts` 传参会报「对象字面量只能指定已知属性」 |
-| `lib/minimax-credits.js` 余额查询的 `page_size` 从 `1000` 改成 `100`（**第 8 类**） | 上游 issue #162 的修复，2026-11-27 跟进（上游提交 `06741784`）。旧值 `1000` 会被服务端以 **400** 拒，脚本随即回退到**不带参数**的裸请求 ⇒ 默认只回最近 **20 个**积分包 ⇒ 余额**静默少算**（用户看到的是「签到成功但积分不涨」）。`1000` 换不来任何额外能力：积分包有效期实测 **29.07–30.00 天**、服务端只回未过期的包 ⇒ **活包天然 ≤30 个**，`100` 已有 3 倍余量。⚠️ 这条端点上**调大反而是错的** —— 调大只会让整次查询失败 |
-| 没有 npm 包里的 `README.md` 与 `cordis.patch.yml`（缺失项，不计入上面的 8 类） | 那是 DSH 前端与插件补丁用的，magpie 侧用不到 |
+| 没有 npm 包里的 `README.md` 与 `cordis.patch.yml`（缺失项，不计入上面的 6 类） | 那是 DSH 前端与插件补丁用的，magpie 侧用不到 |
 
 保留时长为什么分平台：判据「只删够老的」是启发式。Windows 上还有第二道网（正被占用的文件删不掉，`rmSync` 抛 `EPERM`/`EBUSY`）；**POSIX 没有这道网** —— `unlink` 对已打开的文件是合法操作，删除会成功，于是「删了正在用的目录」反而成功，只是把那个窗口弄坏。所以 POSIX 只能靠阈值自保，取 6 小时。真正在用的目录存活上限是登录本身 4 分钟（`MAGICREW_BROWSER_LOGIN_TIMEOUT_MS = 240_000`），两个阈值相对它至少有 4 倍余量（按同文件注释的 13 分钟总寿命算：Windows 1h ≈ 4.6×、POSIX 6h ≈ 27.7×）。
 
-除这 14 个文件之外，本仓库对上游代码**没有其它改动**。
+除这 12 个文件之外，本仓库对上游代码**没有其它改动**。
 
 > **2026-11-11 追加的第 7 类（13 个文件）**：`lib/baizhi-rpc.js` 与 `.d.ts` 新增 `baizhi.setSession`
 > —— 与 `monkeycode.setSession` 逐条同型，只把控制台网页登录态（`sl-session` +
@@ -106,7 +105,7 @@ cd /path/to/magpie-Jet-Hub && node scripts/verify-vendor.mjs /tmp/up2
 2. 差异集合必须**恰好等于**补丁表那 13 个文件 —— 少一个 = 补丁被同步覆盖（静默故障），
    多一个 = 快照被别的动作污染过。**每个补丁文件还核 sha256 指纹**（`PATCH_SHA256`），
    所以「补丁文件被人手改」也抓得到 —— 有意改补丁时跑 `--print-hashes` 更新那 13 行；
-3. `lib/*.map` **666 个 / 4.61 MiB**、`locale/` 2 个逐字节一致（两个数都是断言，不是只打印）；
+3. `lib/*.map` **666 个 / 4.63 MiB**、`locale/` 2 个逐字节一致（两个数都是断言，不是只打印）；
 4. `vendor/package.json` 的版本号与上游同一次提交一致（并打出依赖树，换机漏依赖就
    表现成「控制台打不开」）。
 

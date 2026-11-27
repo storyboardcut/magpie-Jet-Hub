@@ -68,9 +68,10 @@
  * profile 目录退避重试删除 —— 每一条都是真实缺陷换来的（见该模块头那张表）。
  * 这里**不重写**任何一条，只组合 {@link ChromiumSession}。
  */
+import { isAbsolute } from 'node:path';
 import { readdirSync, rmSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { isAbsolute, join } from 'node:path';
 import { BrowserDeploymentError, ChromiumSession, browserCandidates, browserNotFoundMessage, findBrowserExecutable, sleep as defaultSleep, } from './chromium-session.js';
 import { readMagicrewLocalCreds, } from './magicrew-local-browser.js';
 import { MAGICREW } from './magicrew-product.js';
@@ -87,6 +88,76 @@ import { MAGICREW } from './magicrew-product.js';
  *
  * ⚠️ 同时它也是「用户实际需要多久」的实测区间上限（扫码/输密码 2–5 分钟）。
  */
+
+/**
+ * 一次性 profile 目录的前缀 —— 唯一真源（本仓改动，2026-10-31）。
+ * ChromiumSession 用它建目录、collectStaleLoginProfiles 用它认领上次留下的目录。
+ */
+const LOGIN_PROFILE_PREFIX = 'magicrew-login-';
+/** 一次回收最多删几个目录：删的是同步成本，卡在「点连接」与「窗口出现」之间。 */
+const STALE_COLLECT_LIMIT = 3;
+/**
+ * 遗留目录的保留时长：Windows 1 小时，其它平台 6 小时。
+ * Windows 有第二道网（正被占用的文件删不掉，EPERM/EBUSY 被吞），POSIX 没有
+ * （unlink 对已打开文件合法，会「成功删掉正在用的目录」），所以取更保守的 6 小时。
+ */
+const STALE_PROFILE_MAX_AGE_MS = (process.platform === 'win32' ? 1 : 6) * 60 * 60 * 1000;
+/**
+ * 回收上一次遗留的一次性 profile 目录（本仓改动，2026-10-31）。
+ *
+ * 为什么需要：ChromiumSession.dispose() 的删除只退避 2.1 秒，而 Windows 上
+ * taskkill /T 之后子进程还要一会儿才释放句柄 —— 一次删不掉就永久留下一个目录。
+ * 更要紧的是窗口被用户关掉时，没有任何回调保证走到 dispose()。
+ * 所以下次开窗前扫一遍才是可靠兜底。本机实测攒到 11 个 / 856 MB。
+ */
+function collectStaleLoginProfiles(minAgeMs = STALE_PROFILE_MAX_AGE_MS) {
+    let root;
+    let entries;
+    try {
+        root = tmpdir();
+        if (root.length === 0)
+            return 0;
+        entries = readdirSync(root, { withFileTypes: true });
+    }
+    catch {
+        return 0;
+    }
+    const cutoff = Date.now() - minAgeMs;
+    let removed = 0;
+    for (const entry of entries) {
+        if (removed >= STALE_COLLECT_LIMIT)
+            break;
+        if (!entry.isDirectory())
+            continue;
+        if (!entry.name.startsWith(LOGIN_PROFILE_PREFIX))
+            continue;
+        const dir = join(root, entry.name);
+        try {
+            if (statSync(dir).mtimeMs > cutoff)
+                continue;
+        }
+        catch {
+            continue;
+        }
+        try {
+            rmSync(dir, { recursive: true, force: true, maxRetries: 2 });
+        }
+        catch {
+            continue;
+        }
+        // 不抛不等于删掉了（force: true 吞 ENOENT，maxRetries 在部分版本被忽略）。
+        // 复核一次，否则「没删掉」也占配额，真正的残留永远排不到。
+        try {
+            statSync(dir);
+            continue;
+        }
+        catch {
+            removed += 1;
+        }
+    }
+    return removed;
+}
+
 export const MAGICREW_BROWSER_LOGIN_TIMEOUT_MS = 240_000;
 /** 轮询间隔（毫秒）。 */
 export const MAGICREW_BROWSER_LOGIN_POLL_MS = 500;
@@ -103,142 +174,6 @@ function normalizePollMs(value) {
         return MAGICREW_BROWSER_LOGIN_POLL_MS;
     }
     return Math.max(1, Math.floor(value));
-}
-/**
- * 一次性 profile 目录的前缀 —— **唯一真源**（本仓改动，2026-10-31）。
- *
- * 它同时决定两件事：`ChromiumSession` 用它建目录、`collectStaleLoginProfiles`
- * 用它认领自己上次留下的目录。写成两个字面量的话，只改一处就会变成
- * 「建了不回收」或更糟的「回收时去删别人的目录」，所以这里只留一份。
- */
-const LOGIN_PROFILE_PREFIX = 'magicrew-login-';
-/**
- * 一次回收最多删几个目录。
- *
- * ## ⚠️ 为什么要有上限（实测 2026-10-31）
- *
- * 这个函数是**同步**的，且执行点在「用户点了连接」与「浏览器窗口出现」之间 ——
- * 它花掉的每一毫秒都是用户盯着没反应的时间。
- *
- * 真机曾经攒到 **11 个目录 / 856 MB**。按实测吞吐（125 MB / 8000 个文件 ≈ 1066 ms）
- * 推算，一次清完 ≈ **7 秒**。那比「残留占着磁盘」更糟：用户会以为按钮坏了。
- *
- * ⇒ 每次只清一批，剩下的留给下次登录。连点几次就清完了。
- *
- * 一批要花多久（2026-10-31 实测）：删除成本按**条目数**主导而不是字节数 ——
- * 真机残留形态是 `8000 个文件 / 125 MB ≈ 15.6 KB/文件`，而一个 78 MB / 312 文件
- * 的目录只要 43 ms，同样 78 MB 摊成 4992 个文件就要 577 ms。所以 LIMIT = 3
- * 在真机上是 **0.6–2.1 秒**，不是「几 MB 级 < 10 ms」那么乐观。
- * 别再往上调：那几秒全卡在「用户点连接」与「窗口出现」之间。
- */
-const STALE_COLLECT_LIMIT = 3;
-/**
- * 遗留目录的保留时长：Windows 1 小时，其它平台 6 小时。
- *
- * ## ⚠️ 为什么两个平台不一样
- *
- * 「只删够老的」是一条**启发式**（不是证明）：它靠「旧到不可能还有窗口在用」来
- * 避免把正在登录的 profile 删掉 —— 那会造成比残留严重得多的问题（profile 被撕裂）。
- *
- * 在 Windows 上还有第二道网兜着：正被占用的文件删不掉，`rmSync` 抛
- * EPERM/EBUSY，被 catch 吞掉。所以 1 小时是安全的，且残留能较快清掉。
- *
- * **POSIX 没有这道网**：`unlink` 对已打开的文件是合法操作，删除会成功，进程
- * 继续持有那个 inode 却写不进新数据 —— 于是「删了正在用的目录」反而会成功，
- * 只是把那个窗口弄坏。⇒ 只能靠阈值本身，取 6 小时，与
- * `vendor/lib/login.js` 里同款清洗逻辑的既有取舍一致。
- *
- * 两个平台下真正在用的目录最长活不过约 10 分钟（登录 4 分钟 + 宿主等 9 分钟），
- * 所以两个阈值都留了足够余量。
- */
-const STALE_PROFILE_MAX_AGE_MS = (process.platform === 'win32' ? 1 : 6) * 60 * 60 * 1000;
-/**
- * 回收**上一次**遗留的一次性 profile 目录（本仓改动，2026-10-31）。
- *
- * ## ⚠️ 为什么需要它（实测 2026-10-31）
- *
- * `ChromiumSession.dispose()` 的删除只退避 `[0,100,500,1500]` 毫秒（总 2.1 秒），
- * 而 Windows 上 `taskkill /T` 之后，Edge 的 crashpad / renderer 子进程还要一小会儿
- * 才释放文件句柄 —— 一次删不掉就永久留下一个目录。本机实测攒到 **11 个 / 856 MB**。
- *
- * 更要紧的是：窗口由**用户**关掉时，没有任何回调保证走到 `dispose()`
- * （`startMagicrewBrowserLogin` 的 finally 只在轮询自己收口时执行），
- * 那条路径一个字节都不会删。
- *
- * ⇒ 一次性目录「这次保证删掉」不现实；**下次开窗前扫一遍**才是可靠兜底。
- *
- * ## ⚠️ 只删够老的（`STALE_PROFILE_MAX_AGE_MS`：Windows 1 小时、其它 6 小时）
- *
- * 一次网页登录最长 4 分钟（`MAGICREW_BROWSER_LOGIN_TIMEOUT_MS`），宿主侧等 9 分钟
- * （`NEW_ACCOUNT_WAIT_MS`），所以 1 小时前的目录一定不是**正在用**的 —— 详见该
- * 常量上那段「为什么两个平台不一样」。
- *
- * 判据用**目录自身**的 mtime。它可能停在创建时刻（Edge 主要在 `Default/` 子目录里
- * 写文件，父目录的 mtime 只在直接子项增删时更新）—— 这没关系：目录由
- * `mkdtempSync` 现建，mtime 起点就是会话开始；何况 Windows 上正被占用的目录
- * `rmSync` 会抛 EPERM/EBUSY，这里吞掉，下一次再试。
- *
- * ## ⚠️ 成本（两处，都必须知道）
- *
- * ① 扫描：本机 `%TEMP%` 有 **19.8 万个条目**，`readdirSync(withFileTypes)` 实测
- * **93ms**。登录是低频操作、且只在开窗前做一次，可以接受。
- *
- * ② 删除：这是**同步**的，见 {@link STALE_COLLECT_LIMIT} —— 所以每轮只删
- * 一批（最多 3 个），不是「扫到多少删多少」。删除时间与残留量成正比，
- * 没有上限的话真机那次 856 MB 会让用户点完连接干等 7 秒。
- *
- * 返回删掉的个数（0 表示没什么可回收，调用方不需要打日志）。
- */
-function collectStaleLoginProfiles(minAgeMs = STALE_PROFILE_MAX_AGE_MS) {
-    // `tmpdir()` 自己也可能抛（TEMP/TMP/TEMPDIR 全指向不可用位置的极端环境）——
-    // 那和「临时目录读不了」是同一类事，都跟登录无关，一律安静返回 0。
-    let root;
-    let entries;
-    try {
-        root = tmpdir();
-        if (root.length === 0)
-            return 0;
-        entries = readdirSync(root, { withFileTypes: true });
-    }
-    catch {
-        return 0;
-    }
-    const cutoff = Date.now() - minAgeMs;
-    let removed = 0;
-    for (const entry of entries) {
-        if (removed >= STALE_COLLECT_LIMIT)
-            break; // 剩下的留给下次登录（理由见 STALE_COLLECT_LIMIT）
-        if (!entry.isDirectory())
-            continue;
-        if (!entry.name.startsWith(LOGIN_PROFILE_PREFIX))
-            continue;
-        const dir = join(root, entry.name);
-        try {
-            if (statSync(dir).mtimeMs > cutoff)
-                continue; // 还年轻，可能正在用
-        }
-        catch {
-            continue; // 刚被别的进程删掉
-        }
-        try {
-            rmSync(dir, { recursive: true, force: true, maxRetries: 2 });
-        }
-        catch {
-            continue; // 被占用 —— 下一次再说
-        }
-        // ⚠️ 不抛 ≠ 删掉了：`force: true` 会吞掉 ENOENT，而 `maxRetries` 在部分
-        // Node 版本上被静默忽略（实测 v24.15.0 完全不重试）。所以复核一次 ——
-        // 否则「没删掉」也会占掉一个 STALE_COLLECT_LIMIT 配额，配额被虚耗后
-        // 真正的残留永远排不到。
-        try {
-            statSync(dir);
-            continue; // 还在 ⇒ 不算删掉，也不消耗配额
-        }
-        catch {
-            removed += 1; // 路径已不存在 ⇒ 真的没了
-        }
-    }
-    return removed;
 }
 /** 从 URL 取 hostname；非法 URL ⇒ 空串（**不猜**）。 */
 function hostnameOf(url) {
@@ -434,62 +369,6 @@ function credentialOfPair(jwt, organization, teamshare) {
     return { jwt: token, organizationCode: org };
 }
 /**
- * 把 `Runtime.evaluate` 回传的 JSON 串解析成凭据（**纯函数**，可直接单测）。
- *
- * ## ⚠️⚠️ 回退必须**逐对**，不能逐键（2026-11-05 审计 P2-2）
- *
- * 旧写法在表达式里对 `a` / `o` **各自**做 `||` 回退 ⇒ 当「老裸键残留 + 新前缀键
- * 并存」时会拼出 `{jwt_裸, org_前缀}` 这种**从未同时写入过**的组合（上游症状：
- * HTTP 200 + `code:403`，与「没读到」相比难查得多）。
- *
- * ⇒ 现在表达式只取**原始值**，回退在这里按**整套键名**配对：
- * 先试裸键那一套（老版本前端），整套不完整再试 `MAGIC:user:` 那一套（当前前端）。
- * 两套都不完整 ⇒ `undefined`（宁可读不到，也绝不混搭）。
- *
- * ⚠️ 逐对回退的**另一条收益**：逻辑落在 TS 里，可以真求值单测 —— 而不是像
- * 旧守卫那样只断言「表达式文本里有这几个字符串」（`if (false)` 即可旁路）。
- *
- * ⚠️⚠️ **`localStorage` 为空要当「还没登完」返回 `undefined`，不要抛**：
- * 用户刚点开窗口那一刻必然是空的，而这条路径每 500ms 走一次。
- */
-export function parseEvaluatedCredential(value) {
-    if (typeof value !== 'string' || value.length === 0)
-        return undefined;
-    let parsed;
-    try {
-        parsed = JSON.parse(value);
-    }
-    catch {
-        return undefined;
-    }
-    /**
-     * ⚠️ 必须挡**非对象载荷**：`JSON.parse('null')` 合法返回 `null`，随后
-     * `parsed.n` 会抛 `TypeError`（2026-11-05 审计实测）。当前表达式恒产出对象
-     * 字符串 ⇒ 生产不可达，但本函数已**导出**（公共 API + 行为级单测主体），
-     * 不该让调用方拿到一个会炸的纯函数。
-     * ⚠️ `'[]'` / `'123'` / `'true'` 逐属性读是 `undefined`（不炸），但同样不是
-     * 我们的载荷形状 ⇒ 一并早退。
-     */
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))
-        return undefined;
-    /**
-     * ⚠️ 本仓改动（2026-10-30）：**删掉了**上游的「localStorage 为空就早退」那条。
-     *
-     * 上游那条早退假设「`localStorage.length` 为 0 ⇒ 还没登完」，但 magicrew 网页版的凭据
-     * 同时写在 IndexedDB 里（`magic-global/user`），`localStorage` 可能只有页面
-     * 自己的界面缓存（`fontScale` / `i18n` / `theme` —— 实测 2026-10-30 它们也
-     * **在** IndexedDB 里），`n === 0` 完全不代表没登录。
-     *
-     * 删掉不会误产出：下面三套 `credentialOfPair` 都是「拿不到 jwt 或拿不到
-     * 组织码就 `undefined`」，三者全空时本函数照样返回 `undefined`。
-     * 保留 `n` 字段是为了诊断（放弃等待时能说清「localStorage 是空的」）。
-     */
-    return credentialOfPair(parsed.a, parsed.o, parsed.t)
-        ?? credentialOfPair(parsed.ao, parsed.oo, parsed.to)
-        // 本仓改动（2026-10-30）：第三套来自 IndexedDB `magic-global/user`。
-        ?? credentialOfPair(parsed.ia, organizationFromIndexedDb(parsed.io), undefined);
-}
-/**
  * 从 IndexedDB `magic-global/user` 的 `organizations` 记录里取组织码（本仓改动，2026-10-30）。
  *
  * ⚠️ 三个字段**都要认**（实测本机 Edge 三条同时存在且值相同，但历史上不同
@@ -542,6 +421,34 @@ function indexedDbNoteOf(value) {
     const unavailable = typeof parsed?.id === 'string' ? parsed.id : '';
     return [note, unavailable].filter((text) => text.length > 0).join('；');
 }
+export function parseEvaluatedCredential(value) {
+    if (typeof value !== 'string' || value.length === 0)
+        return undefined;
+    let parsed;
+    try {
+        parsed = JSON.parse(value);
+    }
+    catch {
+        return undefined;
+    }
+    /**
+     * ⚠️ 必须挡**非对象载荷**：`JSON.parse('null')` 合法返回 `null`，随后
+     * `parsed.n` 会抛 `TypeError`（2026-11-05 审计实测）。当前表达式恒产出对象
+     * 字符串 ⇒ 生产不可达，但本函数已**导出**（公共 API + 行为级单测主体），
+     * 不该让调用方拿到一个会炸的纯函数。
+     * ⚠️ `'[]'` / `'123'` / `'true'` 逐属性读是 `undefined`（不炸），但同样不是
+     * 我们的载荷形状 ⇒ 一并早退。
+     */
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))
+        return undefined;
+    // 本仓改动：不再用 parsed.n === 0 早退 —— n 只数 localStorage 长度，
+    // 而 IndexedDB 腿有凭据时 localStorage 可能是空的（那正是补丁要救的场景）。
+    return credentialOfPair(parsed.a, parsed.o, parsed.t)
+        ?? credentialOfPair(parsed.ao, parsed.oo, parsed.to)
+        // 本仓改动（2026-10-30）：第三套来自 IndexedDB magic-global/user。
+        // 上游只读 localStorage 的两套 ⇒ 用插件自己开的窗口登录时 CDP 腿恒读不到。
+        ?? credentialOfPair(parsed.ia, organizationFromIndexedDb(parsed.io), undefined);
+}
 /**
  * 尝试**一次**通过 CDP 读实时凭据（并把失败原因带出来）。
  *
@@ -582,19 +489,20 @@ async function attemptCredentialViaCdp(session, hostnames) {
         if (attachedId.length === 0)
             return { failure: 'Target.attachToTarget 没给出 sessionId' };
         sessionId = attachedId;
-        // 本仓改动（2026-10-30）：`awaitPromise: true` 是 IndexedDB 补丁的一部分 ——
-        // 表达式现在是 async IIFE（要 `await` 打开库），不传就拿到一个 pending Promise。
+        // 本仓改动（2026-10-30）：awaitPromise: true 是 IndexedDB 补丁的一部分 ——
+        // CDP_CREDENTIAL_EXPRESSION 已换成 async IIFE（要读 IndexedDB），
+        // 不加这个参数拿回来的会是 Promise 序列化结果，而不是凭据。
         const evaluated = await cdp.send('Runtime.evaluate', { expression: CDP_CREDENTIAL_EXPRESSION, awaitPromise: true, returnByValue: true }, CDP_CREDENTIAL_TIMEOUT_MS, attachedId);
         if (evaluated?.exceptionDetails !== undefined) {
             return { failure: 'Runtime.evaluate 在页面里抛错（页面可能正在导航）' };
         }
         const credential = parseEvaluatedCredential(evaluated?.result?.value);
-        if (credential !== undefined)
-            return { credential };
         // ⚠️ 没读到 = 「用户还没登完」这种**正常**未完成态 ⇒ 不记 failure。
         // 但 IndexedDB 那条腿自己报的错（库不存在 / databases() 不可用 / open 抛错）
-        // 不是「用户没登」—— 挂到 note 上，放弃等待时能一眼区分。
+        // 不是「用户没登」—— 挂到 note 上，放弃等待时能一眼区分两者。
         const note = indexedDbNoteOf(evaluated?.result?.value);
+        if (credential !== undefined)
+            return { credential };
         return note.length === 0 ? {} : { note };
     }
     catch (error) {
@@ -702,7 +610,7 @@ export function createMagicrewCredentialWaiter(deps) {
     /** 实时读尝试了几次 / 最后一次的失败原因（只用于放弃时那一行诊断）。 */
     let realtimeAttempts = 0;
     let lastRealtimeFailure;
-    /** IndexedDB 那条腿最后一次自己报的错（本仓改动，2026-10-30；只用于放弃时那行诊断）。 */
+    /** IndexedDB 那条腿自己报的错（库不存在 / databases() 不可用 / open 抛错）。 */
     let lastIndexedDbNote;
     /** 读一拍：**实时优先、磁盘兜底**。 */
     const readOnce = async () => {
@@ -722,9 +630,8 @@ export function createMagicrewCredentialWaiter(deps) {
             // 拿它盖掉真故障会让放弃时那一行说不出任何有用的话。
             if (realtime.failure !== undefined)
                 lastRealtimeFailure = realtime.failure;
-            // IndexedDB 那条腿的报错同理：它不是「用户没登」，但也不是致命故障，
-            // 攒着给放弃时那一行（本仓改动，2026-10-30）。
-            if (realtime.note !== undefined)
+            // IndexedDB 腿自己报的错（不是「用户没登」）—— 留着给放弃时那一行用。
+            if (typeof realtime.note === 'string' && realtime.note.length > 0)
                 lastIndexedDbNote = realtime.note;
         }
         try {
@@ -760,9 +667,15 @@ export function createMagicrewCredentialWaiter(deps) {
          * 「用户没登」与「我们读的方式坏了」在用户那里同形，只有这一行能分开。
          */
         if (deps.log !== undefined) {
-            const note = lastIndexedDbNote === undefined ? '' : ` / IndexedDB 那条腿：${lastIndexedDbNote}`;
-            deps.log(`[magicrew] CDP 与磁盘都没读到凭据（CDP 尝试 ${realtimeAttempts} 次 / `
-                + `最后一次 CDP 失败原因：${lastRealtimeFailure ?? '（无；说明页面在，只是 localStorage 与 IndexedDB 里都还没有凭据 —— 用户没登完）'}${note}）`);
+            const notes = [];
+            if (lastRealtimeFailure !== undefined)
+                notes.push(`最后一次 CDP 失败原因：${lastRealtimeFailure}`);
+            if (lastIndexedDbNote !== undefined)
+                notes.push(`IndexedDB 那条腿报了：${lastIndexedDbNote}`);
+            deps.log(`[magicrew] CDP 与磁盘都没读到凭据（CDP 尝试 ${realtimeAttempts} 次`
+                + (notes.length === 0
+                    ? '；页面在，只是还没凭据 —— 用户没登完）'
+                    : `；${notes.join('；')}）`));
         }
         return undefined;
     };
@@ -967,12 +880,6 @@ export async function createChromiumMagicrewLogin(url, deps = {}) {
                 overrideValue: process.env.ZCODE_CHROME_PATH,
             }), 'browser-not-found');
     }
-    // 本仓改动（2026-10-31）：开窗前先把上次没删掉的一次性 profile 收掉
-    // （理由见 {@link collectStaleLoginProfiles} 的注释）。
-    const staleRemoved = collectStaleLoginProfiles();
-    if (staleRemoved > 0) {
-        deps.log?.(`[jet-hub] 超级麦吉 回收了 ${staleRemoved} 个上次遗留的临时浏览器 profile（%TEMP%/${LOGIN_PROFILE_PREFIX}*）`);
-    }
     const session = new ChromiumSession({
         executablePath: executable,
         /**
@@ -983,6 +890,8 @@ export async function createChromiumMagicrewLogin(url, deps = {}) {
         hideWindow: false,
         windowSize: '1024,800',
         // 每次登录一个**一次性** profile（理由见文件头）。
+        // ⚠️ 本仓改动：用常量而不是字面量 —— 建目录与回收必须用同一个前缀，
+        // 写成两处字面量时只改一处会变成「建了不回收」或「回收时删别人的目录」。
         profilePrefix: LOGIN_PROFILE_PREFIX,
         initialUrl: url,
         ...deps.readyTimeoutMs === undefined ? {} : { readyTimeoutMs: deps.readyTimeoutMs },
@@ -990,6 +899,13 @@ export async function createChromiumMagicrewLogin(url, deps = {}) {
         notFoundHint: '（网页版登录需要本机有一个 Chromium 内核浏览器）',
         ...deps.log === undefined ? {} : { log: deps.log },
     });
+    /**
+     * 本仓改动（2026-10-31）：开窗前回收上次遗留的一次性 profile 目录。
+     * 窗口被用户关掉时没有任何回调保证走到 dispose()，只能靠下次开窗前扫一遍。
+     */
+    const staleRemoved = collectStaleLoginProfiles();
+    if (staleRemoved > 0)
+        deps.log?.(`[jet-hub] 回收了 ${staleRemoved} 个遗留的临时浏览器 profile`);
     try {
         await session.start();
         // ⚠️⚠️ **导航失败不阻断登录**（2026-10-30 四路审计 P1 D-06 修）：

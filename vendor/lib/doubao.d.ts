@@ -10,7 +10,8 @@
  *
  * ⚠️ **签名不是 header，是 query 的 `a_bogus`**（与 TRAE 的 `X-Bogus` 不同源）：
  * 它由豆包页面上下文里的 `bdms.frontierSign` 生成（`window.bdms` 只在
- * doubao.com 页面里存在），⇒ **签到必须走 CDP 页面会话**（与 zcode captcha /
+ * doubao.com 页面里存在），⇒ **签到必须签名**（2026-11-26 起在 `node:vm` 沙箱里
+ * 跑随包内置的官方 SDK，零下载、零浏览器；与 zcode captcha /
  * magicrew 浏览器登录同型），纯 Node fetch 产不出合法 `a_bogus`。
  *
  * ## 设备身份
@@ -81,6 +82,15 @@ export declare function doubaoDeviceIdentityOf(credential: DoubaoCredential): {
 export declare function sessionIdFromCookie(cookie: string | undefined): string | undefined;
 /** 豆包主站基址（签到/活动端点都挂在它下面）。 */
 export declare const DOUBAO_BASE_URL = "https://www.doubao.com";
+/**
+ * 与浏览器一致的 UA（豆包 Web）。
+ *
+ * ⚠️ 签到（`a_bogus` 沙箱）与 bdms SDK chunk 拉取必须**共用同一份** UA，
+ * 否则服务端看到「同一账号两种设备」。扫码登录那条腿已于 2026-11-26 删除
+ * （passport 在扫码后强制要求 SDK 现场算的 `sign/qs/a_bogus`），这个常量由
+ * `doubao-signin.ts` 与 `doubao-bdms.ts` 共享。
+ */
+export declare const DOUBAO_WEB_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 /** 每日签到领取端点路径（实测接通，2026-11-03）。 */
 export declare const DOUBAO_CHECKIN_PATH = "/alice/ug/campaign/landing/checkin";
 /** 签到活动组码（`pc_incentive_task_mvp_v3`，实测自 `Local State` 的 user-growth 快照）。 */

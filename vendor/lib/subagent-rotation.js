@@ -66,29 +66,15 @@ export function sanitizeSubagentAssignments(raw) {
          * ⚠️ 与 slot 同纪律：非法值**丢弃**（不给默认值）——
          * 猜一个账号 id 会让子代理用错号，且无从排查。
          */
-        const pinnedAccountId = typeof src.pinnedAccountId === 'string' && src.pinnedAccountId.length > 0
-            ? src.pinnedAccountId
-            : undefined;
-        const pinSetAt = typeof src.pinSetAt === 'number' && Number.isFinite(src.pinSetAt) && src.pinSetAt >= 0
-            ? src.pinSetAt
-            : undefined;
+        /* ⚠️ pin 字段已删（2026-11-25 重构：起点改存 preferredRotation）。 */
         /** ★ 用户手动选的账号（与 pin 同纪律：非法值丢弃，不猜）。 */
-        const userPickedAccountId = typeof src.userPickedAccountId === 'string' && src.userPickedAccountId.length > 0
-            ? src.userPickedAccountId
-            : undefined;
-        const userPickedAt = typeof src.userPickedAt === 'number' && Number.isFinite(src.userPickedAt) && src.userPickedAt >= 0
-            ? src.userPickedAt
-            : undefined;
+        /* ⚠️ userPicked 字段已删（2026-11-25：手选直接写 preferredRotation）。 */
         // ⚠️ 键必须是 sessionId 本身：写错就是「查不到分配」→ 静默回落主代理起点。
         result[sessionId] = {
             sessionId,
             parentSessionId,
             at,
             slot,
-            ...(pinnedAccountId === undefined ? {} : { pinnedAccountId }),
-            ...(pinnedAccountId === undefined || pinSetAt === undefined ? {} : { pinSetAt }),
-            ...(userPickedAccountId === undefined ? {} : { userPickedAccountId }),
-            ...(userPickedAccountId === undefined || userPickedAt === undefined ? {} : { userPickedAt }),
             ...(src.ended === true ? { ended: true } : {}),
         };
     }
@@ -168,88 +154,6 @@ export function markSubagentEnded(assignments, sessionId) {
     if (existing === undefined)
         return assignments;
     return { ...assignments, [sessionId]: { ...existing, ended: true } };
-}
-/**
- * 取下一个 slot 序号（= 当前最大 slot + 1）。
- *
- * ⚠️ **不能**用 `Object.keys().length`：淘汰会删旧记录，导致序号回退 ⇒
- * 多个子代理拿到同一个 slot ⇒ 挤在同一个账号上。
- * 取 `max(slot) + 1` 才单调。
- */
-/**
- * ★★★ **钉住某子代理的账号**（2026-11-24 用户要求）。
- *
- * ## 用户原话
- *
- * > 「我是希望『拉起时定死，只有该号不可用才换』，
- * >   这样可以保证子代理的缓存命中率高，如果频繁换帐号，缓存命中率就低了。」
- *
- * ⚠️ 这是**正确性**要求，不是优化：prompt cache 按
- *（账号 + 模型 + 前缀）命中，每发请求重算起点 ⇒ 池子一波动就换号
- * ⇒ 缓存全失效 ⇒ 同一段长上下文被重复计费。
- *
- * @param assignments - 分配表
- * @param sessionId - 子代理会话 id
- * @param accountId - 要钉住的账号 id
- * @param now - 钉住时刻
- * @returns 新分配表；**已钉住同一账号时返回原对象**（避免无谓写盘与广播）
- */
-export function pinSubagentAccount(assignments, sessionId, accountId, now) {
-    const existing = assignments[sessionId];
-    if (existing === undefined)
-        return assignments;
-    if (accountId.length === 0)
-        return assignments;
-    /** ⚠️ 已经是这个号 ⇒ 返回**原对象**（调用方据此跳过落盘）。 */
-    if (existing.pinnedAccountId === accountId)
-        return assignments;
-    return {
-        ...assignments,
-        [sessionId]: { ...existing, pinnedAccountId: accountId, pinSetAt: now },
-    };
-}
-/**
- * ★★★ **记录用户手动选的账号**（2026-11-24 用户定 B 方案）。
- *
- * ## 用户原话
- *
- * > 「用户手动重选的话是按照用户的意愿来，其他情况就是使用拉起时固定的那个，
- * >   可以避免系统乱换号，避免缓存命中低」
- *
- * ## 与其他字段的关系
- *
- * | 字段 | 谁写 | 优先级 |
- * |---|---|---|
- * | `userPickedAccountId` | **用户**（子代理页面手动选）| **最高** |
- * | `pinnedAccountId` | 系统（拉起/重算时自动）| 中 |
- * | `slot` | 系统（首次分配）| 低 |
- *
- * ⚠️ **不覆盖 `pinnedAccountId`**：pin 是「系统视角的稳定值」，
- * 用户选择是「另一层意图」。两者分开存，才能在「用户选的号暂时不可用」时
- * 回落到 pin（而不是丢失两个信息）。
- *
- * ⚠️ 传 `undefined`/`''` ⇒ **清除**用户选择（回落到 pin 的语义）。
- *
- * @returns 新分配表；值未变时返回**原对象**（调用方据此跳过写盘）
- */
-export function setUserPickedAccount(assignments, sessionId, accountId, now) {
-    const existing = assignments[sessionId];
-    if (existing === undefined)
-        return assignments;
-    const next = typeof accountId === 'string' && accountId.length > 0 ? accountId : undefined;
-    /** ⚠️ 同值 ⇒ 原对象（避免每发请求都写盘）。 */
-    if (existing.userPickedAccountId === next)
-        return assignments;
-    const base = { ...existing };
-    if (next === undefined) {
-        delete base.userPickedAccountId;
-        delete base.userPickedAt;
-    }
-    else {
-        base.userPickedAccountId = next;
-        base.userPickedAt = now;
-    }
-    return { ...assignments, [sessionId]: base };
 }
 export function nextSubagentSlot(assignments) {
     let max = -1;

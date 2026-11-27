@@ -196,82 +196,13 @@ function leveldbContentForFile(path, name, log) {
  *
  * ⚠️ 文件之间用 `\n` 隔开：不隔开时前一个文件的尾部与后一个的头部会拼成一条
  * **不存在的**记录（可能凭空造出一对 jwt × org）。
- */
-function leveldbTextForProfile(root, profile, log, hostname = '') {
-    // ⚠️ 本仓改动（2026-10-30）：**两处**都要读。
-    //
-    // magicrew 网页版把凭据写在 **IndexedDB** 的 `magic-global/user` 库里，
-    // `Local Storage` 里只有页面自己的缓存（`fontScale` / `i18n` / `theme` 三条
-    // 界面配置也在 IndexedDB，别拿它们当「已经读到凭据」的证据）。
-    // 只读 `Local Storage` ⇒ 磁盘那条腿恒读不到 ⇒ 只能靠 CDP 腿硬撑。
-    //
-    // 两段之间用 `\n` 隔开，理由同上游注释：不隔开时前一个目录的尾部与后一个的
-    // 头部会拼成一条**不存在的**记录（可能凭空造出一对 jwt × org）。
-    return [leveldbTextOfDir(join(root, profile, 'Local Storage', 'leveldb'), log),
-        indexedDbTextFor(join(root, profile, 'IndexedDB'), hostname, log)]
-        .filter((text) => text.length > 0)
-        .join('\n');
-}
-/**
- * 一个 leveldb 目录（或它的上级目录）的文本。
  *
- * ⚠️ 传上级目录时递归一层：每个站点一个 `https_<host>_0.indexeddb.leveldb` 子目录。
+ * ## ⚠️⚠️ 只读目标站点那一个目录，绝不能全扫（本仓改动，2026-10-30）
  *
- * ## ⚠️⚠️ 为什么要抽成独立函数（2026-11-05 返工）
- *
- * `Local Storage/leveldb` 与 `IndexedDB/<site>.indexeddb.leveldb` 是**同一套**
- * LevelDB 格式（`.ldb` / `.sst` 是 SSTable、`.log` 是 WAL），必须走同一条
- * 「先解记录、再按 sequence 取最新」的路径 —— 见 {@link leveldbContentForFile}
- * 与 {@link leveldbVisibleRecords} 的注释。
- *
- * ⚠️ **不要**退回 `readFileSync(...).toString('latin1')` 那条老路：从原始字节里
- * 扫描会编造凭据（2026-11-05 对抗审计 P3-3）。
- */
-function leveldbTextOfDir(dir, log) {
-    let files;
-    try {
-        // ⚠️ `withFileTypes` 而不是 `readdirSync(dir)` + `statSync`：后者是 N 次系统
-        // 调用，`%TEMP%` 有 19.8 万个条目时实测差一个数量级（同一个坑见
-        // `collectStaleLoginProfiles` 的注释）。
-        files = readdirSync(dir, { withFileTypes: true });
-    }
-    catch {
-        return '';
-    }
-    const records = [];
-    const rawTexts = [];
-    for (const entry of files) {
-        const full = join(dir, entry.name);
-        if (entry.isDirectory()) {
-            const nested = leveldbTextOfDir(full, log);
-            if (nested.length > 0)
-                rawTexts.push(nested);
-            continue;
-        }
-        const content = leveldbContentForFile(full, entry.name, log);
-        if (content === undefined)
-            continue;
-        // ⚠️ 不要用 `records.push(...content.records)`：记录多时 V8 会抛 RangeError。
-        for (const record of content.records)
-            records.push(record);
-        if (content.rawText.length > 0)
-            rawTexts.push(content.rawText);
-    }
-    const visible = leveldbVisibleRecords(records);
-    const rendered = visible.length > 0 ? leveldbRecordsText(visible) : '';
-    return [rendered, ...rawTexts].filter((text) => text.length > 0).join('\n');
-}
-/**
- * 只读**目标站点**的 IndexedDB 目录（`https_<host>_0.indexeddb.leveldb`）。
- *
- * ## ⚠️⚠️ 不能把整个 `IndexedDB` 目录全扫
- *
- * 实测本机 Edge 有 **150+ 个站点目录、1.7 GB**（这个数随你上过的网站增长，别当
- * 常数），全扫会直接 `RangeError: Invalid string length`（字符串上限 ~512 MB）
- * —— 那是一个每次都会发生的硬崩。按站点定位后单目录通常只有几十 KB。
- *
- * 目录名形式：`https_www.letsmagic.cn_0.indexeddb.leveldb`（非默认端口时带
- * `_<port>`；另有 `.indexeddb.blob` 兄弟目录，也一并认）。
+ * 本机 Edge 的 `IndexedDB` 下有 **150+ 个站点目录、合计 1.7 GB**。全扫一遍会把
+ * 它们全部读进内存拼成一个字符串 ⇒ 直接 `RangeError: Invalid string length`。
+ * ⇒ 必须按 `<origin>.indexeddb.leveldb` / `.blob` 的目录名精确匹配 `wanted`，
+ *    只下钻命中的那几个。
  */
 function indexedDbTextFor(dir, hostname, log) {
     const host = String(hostname ?? '').trim().toLowerCase();
@@ -368,6 +299,37 @@ function indexedDbRawTextOfDir(dir, log) {
     }
     return [parts.join('\n'), ...rawTexts].filter((text) => text.length > 0).join('\n');
 }
+function leveldbTextForProfile(root, profile, log, hostname = '') {
+    const dir = join(root, profile, 'Local Storage', 'leveldb');
+    let files;
+    try {
+        files = readdirSync(dir);
+    }
+    catch {
+        return '';
+    }
+    const records = [];
+    const rawTexts = [];
+    for (const file of files) {
+        const content = leveldbContentForFile(join(dir, file), file, log);
+        if (content === undefined)
+            continue;
+        // ⚠️ 不要用 `records.push(...content.records)`：记录多时 V8 会抛 RangeError。
+        for (const record of content.records)
+            records.push(record);
+        if (content.rawText.length > 0)
+            rawTexts.push(content.rawText);
+    }
+    const visible = leveldbVisibleRecords(records);
+    const rendered = visible.length > 0 ? leveldbRecordsText(visible) : '';
+    // ⚠️ 本仓改动：magicrew 网页版把凭据写在 IndexedDB 的 magic-global/user 库里，
+    // Local Storage 里只有页面缓存（不是凭据）。只读 Local Storage ⇒ 磁盘那条腿恒读不到。
+    // 两段之间用 \n 隔开：不隔开会把前一段尾部与后一段头部拼成不存在的记录。
+    return [rendered, ...rawTexts,
+        indexedDbTextFor(join(root, profile, 'IndexedDB'), hostname, log)]
+        .filter((text) => text.length > 0)
+        .join('\n');
+}
 /**
  * 一个 User Data 根目录下**全部 profile** 的 leveldb 文本。
  *
@@ -426,6 +388,106 @@ function* matchesWithIndex(patterns, chunk) {
         }
     }
 }
+/** host 的全部写法：`www.letsmagic.cn` / `letsmagic.cn`（去重、保持顺序）。 */
+function hostsFor(hostname) {
+    const host = String(hostname ?? '').trim();
+    if (host.length === 0)
+        return [];
+    const bare = host.replace(/^www\./, '');
+    const hosts = [host, bare, `www.${bare}`];
+    return hosts.filter((value, index) => value.length > 0 && hosts.indexOf(value) === index);
+}
+/**
+ * 在 host 每一次出现的位置开窗，取窗口内同一 origin 的 `jwt × organizationCode`。
+ *
+ * 截断点 = 「下一个**不同站点**的 origin」，同站点的多条记录不截断。
+ *
+ * ⚠️ 每把 jwt 配**它自己后面**最近的那个组织码：LevelDB 按 key 排序
+ * （`authorization` < `organizationCode`），同一批写入的挨在一起；取「窗口内第一个
+ * org」会在同一站点存过多套凭据时配错（症状：HTTP 200 + `code:403` 且极难归因）。
+ */
+export function credsNear(text, hostname, window = MAGICREW_LOCAL_WINDOW) {
+    const host = String(hostname ?? '').trim();
+    if (text.length === 0 || host.length === 0)
+        return [];
+    const bare = host.replace(/^www\./, '');
+    const origins = [];
+    for (const match of text.matchAll(ORIGIN_RE)) {
+        origins.push({ host: match[1] ?? '', at: match.index ?? 0 });
+    }
+    const out = [];
+    const seen = new Set();
+    let at = -1;
+    while ((at = text.indexOf(host, at + 1)) !== -1) {
+        let stop = Math.min(text.length, at + window);
+        for (const origin of origins) {
+            if (origin.at > at && !origin.host.includes(bare)) {
+                stop = origin.at;
+                break;
+            }
+        }
+        const slice = text.slice(at, stop);
+        const jwts = [...matchesWithIndex(AUTHORIZATION_PATTERNS, slice)]
+            .sort((left, right) => left.index - right.index);
+        const orgs = [...matchesWithIndex(ORGANIZATION_PATTERNS, slice)]
+            .sort((left, right) => left.index - right.index);
+        for (const jwt of jwts) {
+            /**
+             * ⚠️⚠️ 只取「jwt 之后**第一个** org」，**不要**跳过空值去够更远的那个
+             * （2026-11-05 审计复核：P2-6 的「空值遮蔽」是**误判**）。
+             *
+             * LevelDB 的 internal key 排序是「user key 升序、同 key 内 **sequence 降序**」
+             * ⇒ 同一个 `organizationCode` 的**最新一次写入排在最前**。于是：
+             *
+             * | 形态 | 含义 | 正确行为 |
+             * |---|---|---|
+             * | 空值在前、有效值在后（同一 `.ldb`） | 空值 = **较新的 tombstone**（登出/切组织） | 有效值已失效 ⇒ **跳过**（旧行为对） |
+             * | 有效值在前、空值在后 | 有效值较新 | 正常配对 |
+             * | 跨 `.log` / 跨文件（写入序，旧在前） | 空值较旧 | 严格说该配对更远那个 |
+             *
+             * 只有**前两种**能靠文本判断，而第三种需要 8 字节 trailer 里的 sequence
+             * （`leveldbRecordsText` 刻意丢弃了它）。在「读不到」与「复活一个已删除的
+             * 组织」之间，后者更糟：`jwt_stale × org_new` 在上游是 HTTP 200 + `code:403`，
+             * 且会把一个**已登出**的账号加回池里。
+             *
+             * ⇒ 保守取第一个（含空值），空值就放弃这把 jwt。
+             * 后续若要做对：按 user key 取**最大 sequence**、值为空即视为 tombstone 丢弃
+             * （见 `docs/agent-notes/providers-magicrew.md` 的「已知边界」）。
+             */
+            const org = orgs.find((candidate) => candidate.index > jwt.index);
+            // ⚠️ 没有 org 就**不产出**：宁可读不到（调用方降级去开窗口登录），
+            // 也绝不编造空串 —— 空 organizationCode 与 jwt 配对在上游是
+            // HTTP 200 + `code:403`，比「没读到」难查得多。
+            if (org === undefined || org.value.length === 0)
+                continue;
+            const key = `${jwt.value}\u0000${org.value}`;
+            if (seen.has(key))
+                continue;
+            seen.add(key);
+            out.push({ jwt: jwt.value, organizationCode: org.value });
+        }
+    }
+    return out;
+}
+/**
+ * 读本机浏览器里属于这个站点的登录态。
+ *
+ * @param hostname 站点 host，例如 `www.letsmagic.cn`（与 localStorage key 里的
+ *                 origin 同源，**不是** API 子域）
+ * @returns 取 iat 最新的那份凭据；读不到返回 `undefined`（调用方降级到窗口登录）。
+ *
+ * ⚠️⚠️ **过期与否不在这里拦**：同一份 leveldb 里可能同时留着一旧一新两套记录
+ * （用户重登过），此时优先给**未过期**的那份；但如果**只有**过期的那份，照样返回
+ * —— 「凭据过期」由调用方（以及上游）判定，在这里拦掉会让「刚过期但 refresh_token
+ * 还能用」的账号**白丢一条自救路径**。
+ */
+/**
+ * 从 IndexedDB 的 leveldb 文本里取 `jwt × organizationCode`（本仓改动，2026-10-30）。
+ *
+ * ⚠️ 这里的 host 归属由**调用方**保证（{@link indexedDbTextFor} 只读目标站点那一个
+ * 目录），所以不再做窗口截断 —— IndexedDB 的记录里站点名只出现在库名旁边，
+ * 按窗口配对会漏。
+ */
 /**
  * IndexedDB 里的登录态：**编码形态与 localStorage 完全不同**（本仓改动，2026-10-30）。
  *
@@ -523,13 +585,6 @@ function idbOrganizationsIn(text) {
     out.sort((left, right) => left.index - right.index);
     return out;
 }
-/**
- * 从 IndexedDB 的 leveldb 文本里取 `jwt × organizationCode`（本仓改动，2026-10-30）。
- *
- * ⚠️ 这里的 host 归属由**调用方**保证（{@link indexedDbTextFor} 只读目标站点那一个
- * 目录），所以不再做窗口截断 —— IndexedDB 的记录里站点名只出现在库名旁边，
- * 按窗口配对会漏。
- */
 export function idbCredentialsIn(text) {
     if (typeof text !== 'string' || text.length === 0)
         return [];
@@ -558,109 +613,6 @@ export function idbCredentialsIn(text) {
     }
     return out;
 }
-/** host 的全部写法：`www.letsmagic.cn` / `letsmagic.cn`（去重、保持顺序）。 */
-function hostsFor(hostname) {
-    const host = String(hostname ?? '').trim();
-    if (host.length === 0)
-        return [];
-    const bare = host.replace(/^www\./, '');
-    const hosts = [host, bare, `www.${bare}`];
-    return hosts.filter((value, index) => value.length > 0 && hosts.indexOf(value) === index);
-}
-/**
- * 在 host 每一次出现的位置开窗，取窗口内同一 origin 的 `jwt × organizationCode`。
- *
- * 截断点 = 「下一个**不同站点**的 origin」，同站点的多条记录不截断。
- *
- * ⚠️ 每把 jwt 配**它自己后面**最近的那个组织码：LevelDB 按 key 排序
- * （`authorization` < `organizationCode`），同一批写入的挨在一起；取「窗口内第一个
- * org」会在同一站点存过多套凭据时配错（症状：HTTP 200 + `code:403` 且极难归因）。
- */
-export function credsNear(text, hostname, window = MAGICREW_LOCAL_WINDOW) {
-    const host = String(hostname ?? '').trim();
-    if (text.length === 0 || host.length === 0)
-        return [];
-    const bare = host.replace(/^www\./, '');
-    const origins = [];
-    for (const match of text.matchAll(ORIGIN_RE)) {
-        origins.push({ host: match[1] ?? '', at: match.index ?? 0 });
-    }
-    const out = [];
-    const seen = new Set();
-    let at = -1;
-    while ((at = text.indexOf(host, at + 1)) !== -1) {
-        let stop = Math.min(text.length, at + window);
-        for (const origin of origins) {
-            if (origin.at > at && !origin.host.includes(bare)) {
-                stop = origin.at;
-                break;
-            }
-        }
-        const slice = text.slice(at, stop);
-        const jwts = [...matchesWithIndex(AUTHORIZATION_PATTERNS, slice)]
-            .sort((left, right) => left.index - right.index);
-        const orgs = [...matchesWithIndex(ORGANIZATION_PATTERNS, slice)]
-            .sort((left, right) => left.index - right.index);
-        for (const jwt of jwts) {
-            /**
-             * ⚠️⚠️ 只取「jwt 之后**第一个** org」，**不要**跳过空值去够更远的那个
-             * （2026-11-05 审计复核：P2-6 的「空值遮蔽」是**误判**）。
-             *
-             * LevelDB 的 internal key 排序是「user key 升序、同 key 内 **sequence 降序**」
-             * ⇒ 同一个 `organizationCode` 的**最新一次写入排在最前**。于是：
-             *
-             * | 形态 | 含义 | 正确行为 |
-             * |---|---|---|
-             * | 空值在前、有效值在后（同一 `.ldb`） | 空值 = **较新的 tombstone**（登出/切组织） | 有效值已失效 ⇒ **跳过**（旧行为对） |
-             * | 有效值在前、空值在后 | 有效值较新 | 正常配对 |
-             * | 跨 `.log` / 跨文件（写入序，旧在前） | 空值较旧 | 严格说该配对更远那个 |
-             *
-             * 只有**前两种**能靠文本判断，而第三种需要 8 字节 trailer 里的 sequence
-             * （`leveldbRecordsText` 刻意丢弃了它）。在「读不到」与「复活一个已删除的
-             * 组织」之间，后者更糟：`jwt_stale × org_new` 在上游是 HTTP 200 + `code:403`，
-             * 且会把一个**已登出**的账号加回池里。
-             *
-             * ⇒ 保守取第一个（含空值），空值就放弃这把 jwt。
-             * 后续若要做对：按 user key 取**最大 sequence**、值为空即视为 tombstone 丢弃
-             * （见 `docs/agent-notes/providers-magicrew.md` 的「已知边界」）。
-             */
-            const org = orgs.find((candidate) => candidate.index > jwt.index);
-            // ⚠️ 没有 org 就**不产出**：宁可读不到（调用方降级去开窗口登录），
-            // 也绝不编造空串 —— 空 organizationCode 与 jwt 配对在上游是
-            // HTTP 200 + `code:403`，比「没读到」难查得多。
-            if (org === undefined || org.value.length === 0)
-                continue;
-            const key = `${jwt.value}\u0000${org.value}`;
-            if (seen.has(key))
-                continue;
-            seen.add(key);
-            out.push({ jwt: jwt.value, organizationCode: org.value });
-        }
-    }
-    // 本仓改动（2026-10-30）：IndexedDB 那一路单独走 —— 它的编码形态与 localStorage
-    // 完全不同（UTF-16LE JWT + 长度前缀组织码），且站点归属已由目录筛选保证
-    // （见 `indexedDbTextFor`），套不进上面的 host 开窗逻辑。
-    for (const found of idbCredentialsIn(text)) {
-        const key = `${found.jwt}\u0000${found.organizationCode}`;
-        if (seen.has(key))
-            continue;
-        seen.add(key);
-        out.push(found);
-    }
-    return out;
-}
-/**
- * 读本机浏览器里属于这个站点的登录态。
- *
- * @param hostname 站点 host，例如 `www.letsmagic.cn`（与 localStorage key 里的
- *                 origin 同源，**不是** API 子域）
- * @returns 取 iat 最新的那份凭据；读不到返回 `undefined`（调用方降级到窗口登录）。
- *
- * ⚠️⚠️ **过期与否不在这里拦**：同一份 leveldb 里可能同时留着一旧一新两套记录
- * （用户重登过），此时优先给**未过期**的那份；但如果**只有**过期的那份，照样返回
- * —— 「凭据过期」由调用方（以及上游）判定，在这里拦掉会让「刚过期但 refresh_token
- * 还能用」的账号**白丢一条自救路径**。
- */
 export function readMagicrewLocalCreds(hostname, options = {}) {
     const host = String(hostname ?? '').trim();
     if (host.length === 0)
@@ -670,7 +622,7 @@ export function readMagicrewLocalCreds(hostname, options = {}) {
     const hosts = hostsFor(host);
     let best;
     for (const root of roots) {
-        const text = leveldbTextFor(root, options.log, host);
+        const text = leveldbTextFor(root, options.log);
         if (text.length === 0)
             continue;
         for (const candidateHost of hosts) {

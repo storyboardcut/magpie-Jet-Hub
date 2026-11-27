@@ -196,6 +196,54 @@ export interface ResolverPool<TCredential = unknown> {
      */
     preferredRotationFor?(provider: string, sessionId: string | undefined): string | undefined;
     /**
+     * ★★★ **写「轮换起点」**（2026-11-25 重构后子代理也要用）。
+     *
+     * ## 为什么子代理需要它
+     *
+     * 用户定案：子代理的「首次起点」= **用户手选下拉框那一步**，只是把
+     * 「用户选位次」换成「策略算位次」。写进 `preferredRotation` 之后，
+     * 子代理就与主代理**走完全相同的代码**，不需要任何子代理标记。
+     *
+     * ## ⚠️ 契约与 `AccountPool.setPreferredRotation` 逐字相同
+     *
+     * - `position === null` ⇒ **删除**该会话的条目（恢复默认）；
+     * - `position` 非空时 **`tierAtSelection` 必填** ——
+     *   没有档位的条目会被 `sanitizePreferredRotation` 丢弃，等于白写
+     *   （池那边已在源头 `return`，这里不要重复兜底）。
+     *
+     * ⚠️ **未实现时**（单测替身）⇒ 不写 ⇒ 子代理退回「每发按策略现算」
+     *    ⇒ 行为仍可用，只是丢掉「首次定死」的缓存收益。
+     */
+    setPreferredRotation?(provider: string, sessionId: string, position: number | null, tierAtSelection?: RotationStartTier): Promise<void>;
+    /**
+     * ★★★ **某会话「实际在用」的账号 id**（2026-11-25，可选能力）。
+     *
+     * 用户原话：「子代理轮换起点策略的参考对象，是主代理**实际在使用的帐号**，
+     * 而不是下拉框选择的」。
+     *
+     * ⚠️ 未实现 / 返回 `undefined`（会话没发过请求 / 插件刚重启）
+     * ⇒ 消费方回落 `preferredRotationFor`（下拉框位次）。
+     */
+    activeAccountOf?(provider: string, sessionId: string | undefined): string | undefined;
+    /**
+     * ★★★ **记某会话「实际在用」的账号**（2026-11-25，可选能力）。
+     *
+     * ⚠️ 由本模块的**统一回报出口**（`report`）自动调用 —— 不需要各 provider 接线。
+     * 实测 24 处 `createCredentialResolver` 里有 7 处没有 `reportAccount`，
+     * 让它们各自配必然继续漏。
+     */
+    setActiveAccount?(provider: string, sessionId: string | undefined, accountId: string | undefined): void;
+    /**
+     * ★★★ **无档位 provider 的子代理起点位次**（2026-11-25，可选能力）。
+     *
+     * ACCIO / ASTUDIO / MAGICREW 这类纯 key 池没有档位，而 `setPreferredRotation`
+     * 会因「无档位」拒绝写入 ⇒ 起点每发重算 ⇒ 永远不稳定。
+     * ⇒ 走这条**独立通道**（不进 `sanitizePreferredRotation`，不污染主代理语义）。
+     */
+    setSubagentStartPosition?(provider: string, sessionId: string, position: number): Promise<void> | void;
+    /** 读回 {@link setSubagentStartPosition} 写下的位次（1-based）。 */
+    subagentStartPositionOf?(provider: string, sessionId: string | undefined): number | undefined;
+    /**
      * ★★★ **子代理专属设置**（2026-11-23，可选能力）。
      *
      * @returns `undefined` = 该 provider 没配子代理设置 ⇒ 走主代理逻辑
@@ -222,36 +270,6 @@ export interface ResolverPool<TCredential = unknown> {
      * @returns 实际分配的 slot（`-1` = 参数非法，未记录）
      */
     recordSubagentStart?(provider: string, sessionId: string, parentSessionId: string, now: number): Promise<number>;
-    /**
-     * ★★★ **钉住某子代理的账号**（2026-11-24，可选能力）。
-     *
-     * ## 为什么需要（用户原话）
-     *
-     * > 「我是希望『拉起时定死，只有该号不可用才换』，
-     * >   这样可以保证子代理的缓存命中率高，如果频繁换帐号，缓存命中率就低了。」
-     *
-     * ⇒ prompt cache 按（账号 + 模型 + 前缀）命中；每发请求重算起点会让
-     *   池子一波动就换号，缓存全失效、同一段长上下文被重复计费。
-     *
-     * ⚠️ 只在**真的选中了某账号**之后调用（读到坏凭据的号不该被钉）。
-     *
-     * ⚠️ 调用点必须 fire-and-forget：实现内部**先同步更新缓存**、再异步落盘。
-     */
-    pinSubagentAccount?(provider: string, sessionId: string, accountId: string): Promise<boolean>;
-    /**
-     * ★★★ **记录用户手动选的账号**（2026-11-24，可选能力）。
-     *
-     * ## 用户原话
-     *
-     * > 「用户手动重选的话是按照用户的意愿来，
-     * >   其他情况就是使用拉起时固定的那个，
-     * >   可以避免系统乱换号，避免缓存命中低」
-     *
-     * ⇒ 优先级：`userPickedAccountId` > `pinnedAccountId` > `slot` 现算。
-     *
-     * ⚠️ 传 `undefined` = 清除手动选择（回落到 pin）。
-     */
-    setUserPickedAccount?(provider: string, sessionId: string, accountId: string | undefined): Promise<boolean>;
     /**
      * ★ **起点选定那一刻的档位**（S6 可选能力；真实 `AccountPool` 已实现）。
      *

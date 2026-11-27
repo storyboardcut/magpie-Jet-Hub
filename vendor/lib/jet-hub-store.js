@@ -443,18 +443,34 @@ export function sanitizeCreditWindows(raw) {
         const source = entry;
         const windowDays = readDays(source.windowDays);
         const imminentDays = readDays(source.imminentDays);
+        /**
+         * ★ 积分阈值（2026-11-27）。与窗口天数**同一套 sanitize**（只接受有限非负数）。
+         *
+         * ⚠️ 阈值 `0` 与 `undefined` 在**选号语义上等价**（都是「关闭」，见
+         * `buddyBalanceTier` 的 `> floor` 判据）—— 但**存储上不合并**：
+         * 用户输 `0` 就当 `0` 存，读回来仍是 `0`，面板显示的是他输的值。
+         * 若这里把 0 归一成 undefined，用户会看到「我输的 0 变成空白」。
+         */
+        const imminentFloor = readDays(source.imminentFloor);
+        const expiringFloor = readDays(source.expiringFloor);
         const subagent = sanitizeSubagentRotation(source.subagent);
         /**
-         * ⚠️ 三者都没读到 ⇒ 整条丢弃（空对象会留下永不消费的噪音键）。
+         * ⚠️ 全都没读到 ⇒ 整条丢弃（空对象会留下永不消费的噪音键）。
          *
          * ⚠️ **`subagent` 必须参与这条判据**：只配了子代理、没配窗口天数的 provider
          * 若被整条丢掉，用户的子代理设置会**静默消失**（下次读回是默认值）。
+         * ⚠️ **两个阈值也必须参与**：只配了阈值、没配窗口天数的 provider
+         * （合法的用法 —— 用默认窗口 + 自定义下限）若被丢掉，阈值会静默失效。
          */
-        if (windowDays === undefined && imminentDays === undefined && subagent === undefined)
+        if (windowDays === undefined && imminentDays === undefined
+            && imminentFloor === undefined && expiringFloor === undefined
+            && subagent === undefined)
             continue;
         result[provider] = {
             ...(windowDays === undefined ? {} : { windowDays }),
             ...(imminentDays === undefined ? {} : { imminentDays }),
+            ...(imminentFloor === undefined ? {} : { imminentFloor }),
+            ...(expiringFloor === undefined ? {} : { expiringFloor }),
             ...(subagent === undefined ? {} : { subagent }),
         };
     }

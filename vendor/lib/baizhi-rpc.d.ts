@@ -77,6 +77,9 @@ export interface RpcBaizhiSetSessionResponse {
 /** 账号池的最小依赖面（结构化类型，避免绑定具体类）。 */
 export interface BaizhiPoolLike {
     listAccountsByProvider(provider: string): Array<{
+/** 账号池的最小依赖面（结构化类型，避免绑定具体类）。 */
+export interface BaizhiPoolLike {
+    listAccountsByProvider(provider: string): Array<{
         id: string;
         enabled: boolean;
         credentialRef: string;

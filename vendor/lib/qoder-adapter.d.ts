@@ -199,6 +199,11 @@ export declare function transportErrorDetail(error: unknown): string;
  * @param code - `LlmError.code`（拿不到时传 `''`）。
  * @param text - 上游原文 / 错误 message（供文案腿使用；无则传 `''`）。
  */
+/**
+ * Permit one CLI-identity retry only for an app-only model's explicit routing/signature rejection.
+ * Queue and billing responses must stay on their existing wait/account-switch paths.
+ */
+export declare function shouldFallbackQoderAppIdentity(status: number, body: string): boolean;
 export declare function classifyQoderFailure(code: string, text: string): QoderFailureClass;
 /**
  * 该类别是否值得**换下一个账号**重试。

@@ -73,6 +73,8 @@ export interface QoderFallbackModel {
     supportsThinking?: boolean;
     /** 是否免费额度模型（远端 `is_free`）。 */
     isFree?: boolean;
+    /** 仅当远端 app 目录有、CLI 目录没有时标记；普通模型仍沿用 CLI gateway identity。 */
+    requiresAppIdentity?: boolean;
     /**
      * 计费倍率（目录 `price_factor`）。
      *
@@ -261,6 +263,13 @@ export interface QoderModelPromotion {
     /** 上游规则 id（远端 `rule_id`，如 `idle_time_model_credit_discount`）。仅用于日志与对账。 */
     ruleId?: string;
 }
+/** COSY metadata passed into the QoderContext signer. */
+export interface QoderClientMetadata {
+    client_type: string;
+    business_product: string;
+    business_type: string;
+    scene: string;
+}
 /**
  * Qoder 产品配置。
  *
@@ -331,23 +340,22 @@ export interface QoderProduct {
      * 仅作记录 —— 本插件只支持 prod，**不要**拿它当 prod 的 client id。
      */
     testClientId: string;
-    /** 请求体 `metadata.context` 的客户端标识（源码 `Fp()` 的 CLI 默认值）。 */
-    clientMetadata: {
-        client_type: string;
-        business_product: string;
-        business_type: string;
-        scene: string;
-    };
+    /** 默认 CLI gateway identity：常规模型与联网搜索继续使用，不随 app-only 模型改变。 */
+    clientMetadata: QoderClientMetadata;
+    /**
+     * 官方桌面 app identity，只供 app-only 模型目录探测及被 `requiresAppIdentity` 标记的模型推理。
+     * 真实 Qoder CN/Global 目录对照为 `10/app/app/app`。
+     */
+    appClientMetadata?: QoderClientMetadata;
+    /** app-only 模型的推理 session_type；普通模型仍用 WASM 默认的 `qodercli`。 */
+    appSessionType?: string;
     /**
      * `/sash/` 端点（用量、活动）的 `Cosy-ClientType` 头取值。
      *
      * ⚠️ **与 `clientMetadata.client_type` 不是同一个身份，不要合并**：
      *
-     * - `clientMetadata.client_type`（`'5'` + `business_product:'cli'`）对应源码
-     *   `Fp()` 的 **CLI** 默认值，用于**推理请求体**的加密信封 `metadata`；
-     * - 本值（`'10'`）对应官方**桌面客户端**身份 —— 源码里是一个冻结常量
-     *   `Mh = Object.freeze({ clientType: 10, businessProduct: 'app', sessionType: 'app' })`，
-     *   官方拿它请求 `/sash/api/v1/me/campaigns`。
+     * - `clientMetadata` 用于 `/algo` 的 COSY 网关身份与加密推理；
+     * - 本值（`'10'`）对应官方桌面客户端的 `/sash` 身份。
      *
      * 服务端按这个头进入活动下发分支（真实缺陷，2026-09-25 定位）：
      *

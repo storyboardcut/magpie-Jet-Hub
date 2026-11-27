@@ -1022,30 +1022,50 @@ export const PROVIDER_REGISTRY = Object.freeze([
         logoClass: 'doubao',
         // ⚠️ `dailyCheckin: true`（2026-11-03 **真机实测接通**）：`POST /alice/ug/campaign/landing/checkin`
         //    返回 `checked_in:true, reward_amount:200, continuous_days:2, idempotent:true`。
-        //    签到带 `a_bogus` 签名（页面 `bdms.frontierSign` 生成）⇒ 走 CDP 页面会话，
-        //    实现在 `src/doubao-signin.ts` 的 `claimDoubaoDailyViaPage`。
+        //    签到带 `a_bogus` 签名（2026-11-25 起在 `node:vm` 沙箱里跑 `bdms` SDK 生成，
+        //    不依赖浏览器），实现在 `src/doubao-signin.ts` 的 `claimDoubaoDailyViaHttp`。
         // ⚠️⚠️ **`balance: true` 的语义是「本渠道进 credits 表」，不是「上游有余额」**
         //   （2026-11-13 审计返工，PR #29 初版把两件事混成一件）：
         //   这张表同时服务 `credits.claimAll`（签到）与 `credits.balances`（余额），
         //   而 `credits-runtime-parity.spec.ts` 有两条硬不变式把「表里有哪些渠道」
         //   绑在 `credits.balance === true` 上（`Object.keys(table) === 余额能力集`）。
         //   豆包的**签到**必须走这张表（`claimDoubaoDailyCheckin`），故这里必须是 `true`。
-        //   ⚠️ 但上游**没有**积分余额概念（签到给的是「每日额度权益」，不是积分包；
-        //   `src/doubao-credits.ts:15-16` 逐字写明「无独立余额端点」）⇒ 余额那一腿
-        //   由 `credits.balances` 端点**短路成空列表**（见 `src/jet-hub-rpc.ts` 的
-        //   doubao 分支），绝不让一个注定为 `null` 的读数冒出去。
-        //   ⚠️ 为什么不能改 `false`：那会让 `createProviderCredits()` 少一条
-        //   ⇒ `credits.claimAll` 对豆包回 `unsupported provider: doubao` ⇒ 签到静默失效。
+        //   余额那一条走 `src/doubao-credits.ts` 的 `fetchDoubaoBalanceDetailed`：
+        //   `POST /alice/commerce/sale/subscription/overview/`，零浏览器零签名，
+        //   面板能读到真实额度（`quota_balance_overview`）。
         credits: { balance: true, dailyCheckin: true },
-        // ✅ **进每日自动链**（2026-11-22 变更，原为排除）：
-        //    签到的 `a_bogus` 签名确实要起一次 headless Chromium（`--headless=new`，
-        //    `src/doubao-signin.ts` 的 spawn 参数），但代价是**每账号每天一次、
-        //    单次几十秒**，与 zcode 那个「按设备烧阿里云 captcha 配额」不同源 ——
-        //    zcode 是拿第三方配额换积分，豆包只是本地起一个临时 profile 的浏览器。
-        //    默认开启的收益（每天自动 +200 额度）大于这点开销，故不再排除。
-        //    ⚠️ 想退出自动链的用户可把该渠道的账号**停用**（停用账号不参与选号与签到），
-        //    或把面板上的渠道开关关掉，无需改代码。
-        autoCheckinExcluded: false,
+        /**
+         * ★★★ **这两格缺一不可**（2026-11-26 双审 P1）。
+         *
+         * ## 为什么必须登记
+         *
+         * `src/doubao-credits.ts` 会给拿不到逐笔到期的包置 `expiryUnknown: true`
+         * —— 但**展示层要看 `windowDays` 才会把子量渲染成「到期未知」**
+         * （`credit-expiry.js:1267` 那条分支）。而 `windowDays` 由后端
+         * `credits.balances` 按 `usesExpiryWindow` 决定是否回填（`jet-hub-rpc.ts:10741`）。
+         *
+         * 缺这两格的实际后果（正向审计实测）：`splitCreditsByExpiry` 返回 `null`
+         * ⇒ `showPackageList = false` ⇒ **面板只剩「积分 4003」，连 hover 的资源包都不挂**
+         * ⇒ `expiryUnknown` 这个标记**一次都不会出现在 UI 上**。
+         *
+         * ⇒ 红线「不得把未知说成永久」是满足的（它现在什么都不说），
+         *   但**修复意图（让用户知道「会过期、只是不知道哪天」）完全没达成**。
+         *
+         * ## 为什么是这两格成对
+         *
+         * `permanentLock` 那条派生守卫要求「`usesExpiryWindow` 的家必须有
+         * `creditPackages`（同一份数据）」。缺任一格，另一格就是空转。
+         *
+         * ⚠️ **不开 `permanentLock`**：豆包的积分没有「永久」这一档，
+         *   开了会冒出「锁定永久积分」的 UI。
+         */
+        creditPackages: true,
+        usesExpiryWindow: true,
+        // ⚠️ 刻意**不**写 `autoCheckinExcluded`（2026-11-26 复核）：零浏览器之后签到就是
+        //    一条 POST，进不进自动链应由**面板那格「豆包自动签到」**（`doubaoCheckinEnabled()`）
+        //    回答 —— 省略 = `false` ⇒ 默认参与、开关默认勾上，与其余渠道一致；
+        //    用户想要「只在手点时签」就把那格开关关掉（显式 doc 字段优先于默认）。
+        //    别在这里补 `true`：那会把面板开关的默认值改成关，等于替用户做了决定。
         // ⚠️ `rateLimit: false` 必须显式写：本渠道当前没有适配器、不写
         //    `modelRateLimits`、也不在 `probeById` 里 ⇒ 「重测 / 重置」点下去恒惰性
         //   （与 magicrew / accio 旧格同因）。将来接推理链路时再翻正。
@@ -1059,8 +1079,7 @@ export const PROVIDER_REGISTRY = Object.freeze([
         //    modelAdapters 目录」守卫（报错「关闭 provider 后模型仍可选」），而 doubao 根本
         //    没有目录可关。`credits` 的两个判据都独立于 `channel`：`dailyCheckin: true`
         //    让签到入口照常出现（`checkinProviders()` 按 `supportsDailyCheckin` 过滤），
-        //    `balance: true` 让豆包进 credits 表（签到的 `claim` 走同一张表；余额那一腿
-        //    由端点短路成空列表，见上方 `credits` 那条）。
+        //    `balance: true` 让豆包进 credits 表（签到的 `claim` 走同一张表）。
         // ⚠️ 2026-11-22 更正：模型目录/适配器已接通（src/doubao-adapter.ts），
         //    已进 modelAdapters 表 ⇒ 运行时 noModelLeg 门（channel===false AND
         //    modelAdapters[provider]===undefined）不成立，模型腿照常读取、对话照常路由。

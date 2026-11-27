@@ -320,12 +320,10 @@ export async function importBackup(credentials, pool, raw, options = {}) {
     assertBackupPayload(raw);
     const payload = raw;
     const mode = options.mode ?? 'replace';
-    // ⚠️ 本仓改动（2026-10-31）：`keepDisabledModels` 让 replace **不写**载荷里的
-    // 模型黑名单。理由见 scripts/import-backup.mjs 的 `--keep-disabled`：备份里的
-    // 黑名单是「导出那一刻的状态」，整份还原会把这些关闭意图强加给当前机器，而
-    // 控制台 2026-10-31 起已没有模型开关，用户没有任何界面能清掉它们。
-    // 为真时用**本机现值**回落，而不是传 `undefined` —— 后者会被
-    // `sanitizeDisabledModels` 变成 `{}`，那是清空。
+    // ⚠️ 本仓改动（2026-10-31）：keepDisabledModels 让 replace 不写载荷里的模型黑名单。
+    // 备份里的黑名单是「导出那一刻的状态」，整份还原会把这些关闭意图强加给当前机器，
+    // 而控制台 2026-10-31 起已没有模型开关，用户没有任何界面能清掉它们。
+    // 为真时用本机现值回落（不是传 undefined —— 后者会被 sanitizeDisabledModels 变成 {}，那是清空）。
     const keepDisabledModels = options.keepDisabledModels === true;
     // 决定「本次真正要落地的账号」与「跳过的账号」。
     // merge 的四层判重：① 池里已有的 **id**；② 池里已有的**身份**（凭据里的
@@ -522,7 +520,7 @@ export async function importBackup(credentials, pool, raw, options = {}) {
         await pool.mergeAccounts(importedAccounts);
     }
     else {
-        // ⚠️ 本仓改动（2026-10-31）：见上方 `keepDisabledModels` 的说明。
+        // ⚠️ 本仓改动（2026-10-31）：见上方 keepDisabledModels 的说明。
         const nextDisabledModels = keepDisabledModels
             ? pool.getStateSnapshot().disabledModels
             : payload.disabledModels;

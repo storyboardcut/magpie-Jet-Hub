@@ -1,58 +1,86 @@
 /**
- * 豆包（Doubao）每日签到 —— CDP 页面会话驱动（**按账号隔离**）。
+ * 豆包（Doubao）每日签到 —— **纯 HTTP（无浏览器）**。
  *
- * ## 账号隔离（2026-11-03 支点验证后重写）
+ * ## 从「CDP 页面会话」迁到「沙箱签名 + 直连」（2026-11-25）
  *
- * **每个账号有独立的 cookie / device_id / web_id**，签到时必须严格按账号隔离：
+ * 老实现在临时 Chromium 里注入该账号的 cookie、由页面自己的 `window.bdms.frontierSign`
+ * 产 `a_bogus`，再带 `credentials:'include'` POST。这条腿要求镜像里有 Chromium
+ * （300MB + Xvfb + VNC），而 hub 在容器 / 无桌面服务器上的部署形态里并没有浏览器
+ * ⇒ 浏览器腿已整段删除，改为「沙箱签名 + 直连」。
  *
- * - **独立临时 profile**（不是豆包客户端的 User Data）：起一个干净的 Chromium，
- *   **不带**任何账号的登录态；
- * - **按账号注入 cookie**：把池里**该账号**的 cookie 用 `Network.setCookie`
- *   注入到这个干净 profile（`credentials:'include'` 读的就是它）；
- * - **按账号拼 query**：`device_id` / `web_id` / `tea_uuid` 由**该账号的
- *   `accountKey`（sessionid）确定性派生**（每账号一套 19 位数字设备号，
- *   对齐 TRAE `deriveDeviceId15` 的纪律 —— 规避服务端「每设备每天一次」
- *   配额），不是页面随机的 verify id。
+ * 页面腿做的事只有三件，HTTP 腿逐一等价替换：
  *
- * ⇒ 多账号场景下，选哪个账号就签哪个账号（实测：注入 A 号 cookie 签到，
- *   返回的是 A 号的 `checkin_date` / `continuous_days`）。
+ * | 页面腿 | HTTP 腿 |
+ * |---|---|
+ * | 注入该账号 cookie（`Network.setCookie`） | `Cookie` 请求头（凭据里的 `cookie`） |
+ * | `window.bdms.frontierSign({…})` | `doubao-bdms.ts`：把同一个 SDK 放进 `node:vm` 沙箱签名 |
+ * | `fetch(url, { credentials:'include' })` | 裸 `fetch`（自己拼 query / 头 / body） |
  *
- * ## 为什么不能复用豆包客户端的 User Data
+ * 请求体、查询串、`Content-Type: application/json`、`Agw-Js-Conv: str` 与页面上
+ * 那一版**逐字相同**（实测签名输出形状一致：`{'X-Bogus': …}`）。
  *
- * 那会固定打在「客户端当前登录的那个号」上 —— 注入的账号 cookie 会被
- * profile 里的 cookie 覆盖（同名键），且 device_id 读的是 Local State 里的
- * 当前号。这是「账号隔离失效」的真实根因（本次重写前的缺陷形态）。
+ * ## 账号隔离
+ *
+ * `device_id` / `web_id` / `tea_uuid` 由**该账号的 `accountKey`（sessionid）确定性派生**
+ * （每账号一套 19 位数字设备号，对齐 TRAE `deriveDeviceId15` 的纪律 —— 规避服务端
+ * 「每设备每天一次」配额），与登录腿共用同一份派生函数（`doubao.ts`）。
+ *
+ * ## 为什么不能"只发 checkin、不查状态"
+ *
+ * `landing/get` 只用于丰富文案：**不能据它短路** —— 已签账号的 `landing/get`
+ * 也回空活动（签完当天就没有可领对象了），短路会把「今天已签」误报成「没有活动」。
+ * `checkin` 本身幂等（已签回 `checked_in:true, idempotent:true`），始终发。
  *
  * @module src/doubao-signin.ts
  */
-import { type BrowserLookup } from './chromium-session.js';
-export declare function doubaoSigninBrowserExecutable(lookup?: BrowserLookup): string | undefined;
 /**
- * 签到找不到浏览器时的提示（分平台说人话 + 回显候选清单）。
+ * 只读探活：判断一份粘进来的 cookie 是否还有登录态（**不发 checkin**）。
  *
- * 与 {@link doubaoSigninBrowserExecutable} 同因：修复前那句「未找到可用的浏览器
- * （Chrome / 豆包内核）——签到需要它的 bdms 签名环境」同样**不分平台、不提变量名、
- * 不回显候选**。本仓其余五家浏览器登录都用 `browserNotFoundMessage`，豆包不该是例外。
- */
-export declare function doubaoSigninBrowserHint(lookup?: BrowserLookup): string;
-/** 极简 CDP 通道（Node 内置 WebSocket，零依赖）。登录会话（`doubao-login.ts`）也复用它。 */
-export declare class MiniCdp {
-    private readonly ws;
-    private nextId;
-    private readonly pending;
-    private constructor();
-    static connect(wsUrl: string): Promise<MiniCdp>;
-    send(method: string, params?: Record<string, unknown>, sessionId?: string, timeoutMs?: number): Promise<unknown>;
-    close(): void;
-}
-/**
- * 执行豆包每日签到（**按账号隔离**：独立 profile + 注入该账号 cookie/device_id）。
+ * ⚠️ 判据来自 2026-11-26 实测：
+ * - 空 cookie / 假 `sessionid` ⇒ `{"code":710012001,"msg":"登录已过期，请重新登录"}`
+ * - 有效账号 ⇒ `code:0`（或 `710010702`「当前没有可领的活动」）
  *
- * @param rawCredential 池里那份 JSON 凭据（含 `cookie` / `deviceId` / `webId`）。
+ * ⇒ **只有 `710012001` 代表登录态失效**，其余错误码（活动类 / 时段类）与登录态
+ *    无关，不能拿来拦用户。网络失败或签名不可用时返回 `sessionOk: undefined`
+ *    （"没验成"），调用方按**放行**处理 —— 宁可让用户先建号，也不要因为一次
+ *    网络抖动把有效 cookie 拒之门外。
  */
-export declare function claimDoubaoDailyViaPage(rawCredential: string, options?: {
+export declare function probeDoubaoSession(rawCredential: string, options?: {
     log?: (msg: string) => void;
-    executablePath?: string;
     timeoutMs?: number;
+    /** 测试注入点：返回 `a_bogus`（生产路径不要传）。 */
+    sign?: () => Promise<string>;
+}): Promise<{
+    sessionOk?: boolean;
+    code?: number;
+    message?: string;
+}>;
+/**
+ * 豆包签到的 HTTP 腿：沙箱签名 + 直接 POST（**不接受任何浏览器兜底**）。
+ *
+ * @param options.sign 测试注入点（默认走 `doubao-bdms.ts` 的 vm 沙箱签名）。
+ *                     生产路径不要传。
+ */
+export declare function claimDoubaoDailyViaHttp(rawCredential: string, options?: {
+    log?: (msg: string) => void;
+    timeoutMs?: number;
+    /** 测试注入点：返回 `a_bogus`。缺省 = `signDoubaoBogus()`（vm 沙箱）。 */
+    sign?: () => Promise<string>;
+}): Promise<{
+    outcome: import('./credits.js').ClaimOutcome;
+    signerError?: string;
+}>;
+/**
+ * ★ **豆包每日签到入口**（只有 HTTP 一条腿，**全程无浏览器**）。
+ *
+ * ⚠️ `executablePath` / `browserFallback` 两个选项已随浏览器腿一起删除：调用方
+ * （`doubao-credits.ts`、`auto-checkin.ts`）传进来也只是被忽略，不如让类型层面
+ * 就拒绝 —— 免得以后有人以为"传个路径就能回退浏览器"。
+ */
+export declare function claimDoubaoDaily(rawCredential: string, options?: {
+    log?: (msg: string) => void;
+    timeoutMs?: number;
+    /** 测试注入点：返回 `a_bogus`（生产路径不要传）。 */
+    sign?: () => Promise<string>;
 }): Promise<import('./credits.js').ClaimOutcome>;
 //# sourceMappingURL=doubao-signin.d.ts.map

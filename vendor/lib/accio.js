@@ -158,6 +158,58 @@ export function accioHeaders(options) {
     if (typeof options.sgcookie === 'string' && options.sgcookie !== '') {
         headers.sgcookie = options.sgcookie;
     }
+    /**
+     * ⚠️⚠️ **团队身份必须逐请求注入**（issue #177）。
+     *
+     * 判据用 `trim() !== ''` 而不是 `!== undefined`：上游对**空串头值**的处理未实测，
+     * 而官方客户端自己会删掉空值 ⇒ 我们也不发（保守且与其一致）。
+     */
+    if (typeof options.teamId === 'string' && options.teamId.trim() !== '') {
+        headers['x-team-id'] = options.teamId.trim();
+    }
+    if (typeof options.routeRegion === 'string' && options.routeRegion.trim() !== '') {
+        headers['x-accio-route-region'] = options.routeRegion.trim();
+    }
+    /**
+     * ★★★ **`x-package-region`**（issue #177 作者实测，2026-11-27）。
+     *
+     * ## 这是**另一条独立缺陷**，而且**确实有效**
+     *
+     * 实测结论（作者原话）：
+     * > 「企业账号目录有 GPT 吗？**取决于 `x-package-region: GLOBAL` 头**，与团队身份无关；
+     * >  带上后 **30 个可见模型含 9 个 GPT**。」
+     *
+     * 与 `x-team-id` 的区别很重要：`x-team-id` 对**团队额度无效**（空间是服务端会话状态，
+     * 见下方 `x-team-id` 注释的更正），但 `x-package-region` 对**模型可见性有效**。
+     *
+     * ⚠️ **只对 `global` 区域加**：作者是在**国际站**实测的，`cn` 未实测 ⇒
+     *   不给国内站发未验证的头（本仓「未实测的组合是单向下注」的既有纪律）。
+     *   若将来确认 `cn` 也需要，再放开这一格。
+     */
+    if (options.region === 'global') {
+        headers['x-package-region'] = 'GLOBAL';
+    }
+    else if (options.region === 'cn') {
+        /**
+         * ★★★ **`cn` 也要发 `CN`**（2026-11-27 从官方 `app.asar` 静态取证）。
+         *
+         * 我第一版只对 `global` 发、`cn` 不发 —— **那是错的**。官方实现（`app.asar` 内）：
+         *
+         * ```js
+         * function aa(e){ let t=e?.trim().toLowerCase()
+         *   return t==='cn'||t?.endsWith(':cn') ? 'CN'
+         *        : t==='global'||t?.endsWith(':global') ? 'GLOBAL' : 'unknown' }
+         * ```
+         *
+         * 且 `getPackageRegionState()` 在**每个出站请求上都会调用**；
+         * 值的最终来源是磁盘 `appInstall.jsonl`，白名单正是 **`CN` | `GLOBAL`**；
+         * `unresolved`（盘上无值）才**不下发**该头
+         * （`app.asar` 内 `AppTracker` 的「packageRegion 解析降级」事件描述逐字如此）。
+         *
+         * ⇒ 只要知道区域，官方**两个站都发**。跟着发才对齐。
+         */
+        headers['x-package-region'] = 'CN';
+    }
     return headers;
 }
 //# sourceMappingURL=accio.js.map

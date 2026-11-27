@@ -26,7 +26,7 @@
  * 则以 `{ ok: false }` 原样上抛给 RPC 层。把失败画成 0 会让用户以为额度被清空
  * —— 那是本仓库反复记录过的缺陷形态。
  */
-import type { ProviderAccountEntry, RpcCreditsBalancesResponse, RpcClineQuotaResponse, RpcUsageAutoCheckinState, RpcUsageBadgeResponse } from './types.js';
+import type { ProviderAccountEntry, RpcCreditsBalanceAccount, RpcCreditsBalancesResponse, RpcClineQuotaResponse, RpcUsageAutoCheckinState, RpcUsageBadgeResponse, RpcUsageBadgeSubscription } from './types.js';
 import type { BadgePreference } from './badge-preferences.js';
 /** RPC 错误（与 `jet-hub-rpc.ts` 的响应信封一致，便于直接透传）。 */
 export interface BadgeRpcError {
@@ -69,6 +69,47 @@ export declare const BADGE_FAILURE_TTL_MS = 15000;
 export declare function badgeTtlMs(env?: NodeJS.ProcessEnv): number;
 /** 读取失败缓存时长（口径同上）。 */
 export declare function badgeFailureTtlMs(env?: NodeJS.ProcessEnv): number;
+/** 徽标快照（缓存的**值**，不含 provider / preference 这些每次都要重新拼的字段）。 */
+interface BadgeSnapshot {
+    /** 生成时刻（毫秒）。 */
+    at: number;
+    /** 仅启用账号的余额行。 */
+    accounts: RpcCreditsBalanceAccount[];
+    /** 被停用而未计入的账号数。 */
+    disabledCount: number;
+    windowDays?: number;
+    /**
+     * 该 provider 当前是否「锁定永久积分」。
+     *
+     * ⚠️ 2026-11-18 补（真实缺陷）：客户端「可用积分 = 短期 + 临期」完全依赖它，
+     *    但徽标快照此前**从未带这个字段** ⇒ 用户锁定后胶囊/弹窗的「可用/总」
+     *    仍不显示。字段语义见 `RpcCreditsBalancesResponse.locked`。
+     */
+    locked?: boolean;
+    /**
+     * 「临期」子窗口天数。
+     *
+     * ⚠️ 与 `windowDays` **同生共死**：徽标弹窗的 `splitParts` 用它把「15 天内」
+     * 再切成「临期 / 短期」两段。缺席时前端退化成三段展示（= 引入三档前的形态）。
+     */
+    imminentDays?: number;
+    /**
+     * ★★★ **临期积分下限**（2026-11-27 正向审计挖出的真缺陷）。
+     *
+     * ## 症状：整条「客户端阈值」链路是**死接线**
+     *
+     * `usage-badge.js` 里多处写着 `imminentFloor: value?.imminentFloor`，
+     * 但**本接口从来不下发这个字段** ⇒ `value?.imminentFloor` **恒 `undefined`**
+     * ⇒ 客户端所有「按阈值降档」的判据**恒按 0 跑**，与服务端选号**分叉**。
+     *
+     * ⚠️ 它靠「对象 spread」逃过了 tsc —— 客户端把不存在的属性读成 `undefined` 是合法的。
+     * ⇒ **类型上缺字段 = 运行时静默失效**，比报错更难查。
+     */
+    imminentFloor?: number;
+    /** ★ **纯短期下限**（同上；`expiring - imminent` ≤ 它 ⇒ 按永久排队）。 */
+    expiringFloor?: number;
+    subscription?: RpcUsageBadgeSubscription;
+}
 /** 装配层注入的依赖（全部可替换 ⇒ 单测零网络、零文件系统）。 */
 export interface UsageBadgeDeps {
     /**
@@ -134,4 +175,27 @@ export interface UsageBadge {
 }
 /** 创建徽标读数服务（每个插件实例一份，内部按渠道各持一个缓存）。 */
 export declare function createUsageBadge(deps: UsageBadgeDeps): UsageBadge;
+/**
+ * ★★★ **把 balances 的「窗口 + 阈值」折算成快照字段**（2026-11-27 正向审计，抽成纯函数）。
+ *
+ * ## 为什么要单独抽出来
+ *
+ * 这四格以前是**内联在 `loadSnapshot` 的 spread 里**的，而 `loadSnapshot` 是类内闭包
+ * ⇒ **只能靠源码文本断言守**（本仓已知它会假绿：`if (false)` 包起来仍匹配）。
+ *
+ * 审计实测的原始缺陷：`imminentFloor`/`expiringFloor` **从来没被透传** ⇒
+ * 客户端 `value?.imminentFloor` 恒 `undefined` ⇒ 整条客户端阈值链路是**死接线**。
+ *
+ * 抽成纯函数后就能**行为级**断言「有值就带上、没值就不带」，而不是查源码里有没有那串字。
+ *
+ * ⚠️ **只透传非 `undefined` 的**（不是 `?? 0`）：`0` 是合法值（= 显式关闭），
+ *    而 `undefined` = 「服务端没给」⇒ 两者必须可区分（本仓反复记录的纪律）。
+ */
+export declare function badgeWindowFieldsOf(balances: {
+    windowDays?: number;
+    imminentDays?: number;
+    imminentFloor?: number;
+    expiringFloor?: number;
+}): Pick<BadgeSnapshot, 'windowDays' | 'imminentDays' | 'imminentFloor' | 'expiringFloor'>;
+export {};
 //# sourceMappingURL=usage-badge.d.ts.map

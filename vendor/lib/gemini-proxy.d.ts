@@ -56,6 +56,13 @@ export declare function createGeminiFetcherResolver(lookup: GeminiProxyLookup): 
 /** 解析器只需池子的「按账号读代理」这一个方法（结构化类型，便于单测注入）。 */
 export interface GeminiProxyPoolLike {
     geminiProxyFor(accountId: string): string;
+    /**
+     * ★ **该 provider 任一账号已配的代理**（可选 —— 旧注入方 / 单测替身不必实现）。
+     *
+     * ⚠️ **只给登录路径用**（见 {@link geminiLoginFetchForAccount}）：
+     * 新账号还没落池 ⇒ `geminiProxyFor` 恒空 ⇒ 必需翻墙的用户登录不上。
+     */
+    geminiProxyForAny?(): string;
 }
 /** 由 `apply()` 在池子就绪后注入（未注入 / 传 `undefined` 时恒直连）。 */
 export declare function setGeminiProxyPool(pool: GeminiProxyPoolLike | undefined): void;
@@ -66,6 +73,32 @@ export declare function setGeminiProxyPool(pool: GeminiProxyPoolLike | undefined
  * 可能合法地拿不到账号 id，抛错会让「测试」按钮直接崩。
  */
 export declare const geminiFetchForAccount: GeminiFetcherResolver;
+/**
+ * ★★★ **登录专用的代理感知 fetcher**（2026-11-26，issue #170）。
+ *
+ * ## 缺陷
+ *
+ * 用户报障「Gemini Code Assist 登录失败：`fetch failed`」，实际是**新账号登录时拿不到代理**：
+ *
+ * ```ts
+ * geminiProxyFor(accountId)                       // 只按 id 查已落池的账号
+ *   ⇒ 新账号的 id 刚生成、还没落池 ⇒ 恒返回 ''
+ *   ⇒ createGeminiFetcherResolver 的 `raw === ''` 分支 ⇒ 返回裸 fetch
+ *   ⇒ Google 在墙外 ⇒ TypeError: fetch failed
+ * ```
+ *
+ * 而**推理**链一直有代理（`geminiFetchForAccount`），所以症状是
+ * 「浏览器能打开授权页（浏览器读系统代理）、面板却一直不出现账号」。
+ *
+ * ## 修法
+ *
+ * 登录时：**先看该账号自己的代理；没有 ⇒ 借本 provider 任一已配代理的账号**。
+ * 一个都没配 ⇒ 仍然直连（保持「没配代理就当不需要代理」的既有语义）。
+ *
+ * ⚠️ **绝不把这个回落用到推理 / 探测路径** —— 那里 `accountId` 是确定的，
+ *   借别人的出口会让「这个号从哪出网」失真（也会让按 IP 判区的渠道误判）。
+ */
+export declare const geminiLoginFetchForAccount: GeminiFetcherResolver;
 /**
  * 连到 Google 超时/连不上时的**用户可读**提示（修法 3）。
  *
@@ -86,5 +119,25 @@ export declare const geminiFetchForAccount: GeminiFetcherResolver;
  *   因为没有 `UND_ERR_*` 错误码而拿不到任何提示；这形同「写进去却没人读」）。
  * @returns 有代理嫌疑时返回提示语，否则返回 `undefined`（调用方用原措辞）。
  */
+/**
+ * ★★★ **裸 `fetch failed` 的 Gemini 专属兜底文案**（2026-11-26，issue #170 审计 P1）。
+ *
+ * ## 为什么必须有它
+ *
+ * `geminiNetworkHint` 的判据吃的是 **`cause` 链上的错误码**（`network-hint.ts` 的 7 码表），
+ * **不吃 `message`** —— 这个判据本身是对的（按码分类比按文案稳）。
+ *
+ * 但审计实测：**裸 `TypeError: fetch failed`（没有 `cause`、或 `cause` 的码不在表里）
+ * ⇒ 返回 `undefined`** ⇒ 登录链退回原文案。而用户报障截图里显示的**正是裸的
+ * 「登录失败：fetch failed」** ⇒ **修复会静默空跑**。
+ *
+ * ⇒ Gemini 是**唯一一个「端点全在墙外」的渠道**：对它来说 `fetch failed`
+ *   几乎必然是网络不通（其余渠道失败时往往还有本地区域的连法）。
+ *   故这里给一条**不依赖 cause 码**的兜底，只在 `geminiNetworkHint` 返回 `undefined`
+ *   时使用（**不修改** `geminiNetworkHint` 本身 —— 它的判据是全仓共用的）。
+ */
+export declare const GEMINI_LOGIN_NETWORK_FALLBACK: string;
+/** `true` = 这是个**没有可用错误码**的网络层失败（用于挑兜底文案）。 */
+export declare function isBareFetchFailure(error: unknown): boolean;
 export declare function geminiNetworkHint(error: unknown, aborted: boolean): string | undefined;
 //# sourceMappingURL=gemini-proxy.d.ts.map

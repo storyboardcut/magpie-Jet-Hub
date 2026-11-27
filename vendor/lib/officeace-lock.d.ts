@@ -65,6 +65,7 @@
  * 连 `resolveUnlocked()` 那条旧路径都不碰（那条路径里有池兜底）。
  */
 import type { OfficeAceCredential, OfficeAceSubscriptionSummary } from './officeace-auth.js';
+import type { SubagentStartPoolLike } from './subagent-start.js';
 /** 池内一个候选账号的最小形状（结构类型，便于单测注入替身）。 */
 export interface OfficeAceAccountRef {
     readonly id: string;
@@ -114,11 +115,73 @@ export interface OfficeAceLockDeps {
      *    「池为空则读兼容文件」两个语义，复刻必然漂移。锁定是新增行为，
      *    解锁态必须**一个字节都不变**。
      */
-    readonly resolveUnlocked: () => Promise<OfficeAceCredential | undefined>;
+    /**
+     * ★ 未锁定态的取凭据路径（2026-11-26 起接收 `sessionId`）。
+     *
+     * ## 为什么现在要传 `sessionId`
+     *
+     * 上游审计 P1-c：「officeace 的接线只挂在 `permanentLocked()` 分支，
+     * **默认未锁定态第一条早退走 `resolveUnlocked`（不接 `sessionId`）**
+     * ⇒ 策略仍完全无效、零报错。」
+     *
+     * ⇒ 装配方据它算出「本会话的起点」，再传给 `getAvailableAccount` 的
+     *   `rotationStartId` 参数（池那边本来就支持，见 `AccountPool.getAvailableAccount`）。
+     *
+     * ⚠️ **`undefined` 时必须与改动前逐字节相同**：装配方不传起点 ⇒
+     *    `getAvailableAccount` 走默认路径。
+     * ⚠️ 参数可选，是为了让**旧调用点**（单测替身、旧嵌入方）继续编译且行为不变。
+     */
+    readonly resolveUnlocked: (sessionId?: string) => Promise<OfficeAceCredential | undefined>;
     /** 按 ref 读凭据（生产 = `officeaceAuth.readCredential(ref, ctx.credentials)`）。 */
     readonly readCredential: (ref: string) => Promise<OfficeAceCredential | undefined>;
+    /**
+     * ★★★ **主代理起点账号**（2026-11-26 第四轮审计 P1-D）。
+     *
+     * 锁定态的 `decideSubagentStart` 之前**没传 `mainSessionStartId`** ⇒
+     * `effectiveMainStart = sameTierIds[0]`（**池首**）⇒ 用户看到「子代理参照池首」，
+     * 而不是「主代理实际在用的那个号」。
+     *
+     * 生产实现传 `index.ts` 的 `subagentMainStartIdOf(OFFICEACE.id, sessionId)`
+     * （它内部自己解析父会话，再取 `activeAccountOf ?? preferredRotationFor`）。
+     * ⚠️ 不传 ⇒ 行为与改动前逐字节相同。
+     */
+    readonly mainStartIdOf?: (sessionId: string) => string | undefined;
+    /**
+     * ★★★ **父会话 id 解析器**（2026-11-26 第四轮审计 P0-C）。
+     *
+     * 锁定态的 `registerSubagentStartIfNeeded` 之前**只从分配表取 `parentSessionId`**，
+     * 而分配表又只能由这次登记写入 ⇒ **鸡生蛋**：`isSubagentHere` 恒 `false`
+     * ⇒ `decideSubagentStart` 在锁定态是**死代码**（实测调用一次后分配表仍 `undefined`）。
+     *
+     * ⚠️ 作者在旧注释里把它登记为「已知的首次请求缺口，等 `credential-resolver` 那条腿补上」
+     * —— 但 officeace **不走那条腿** ⇒ 那不是「首次缺口」，是**永久缺口**。
+     *
+     * 生产实现传 `index.ts` 的 `resolveSubagentParent`（同文件对 codearts 腿已用它兜底）。
+     */
+    readonly resolveSubagentParent?: (sessionId: string) => string | undefined;
     /** 兼容路径：池里没有任何账号时读本机那份单凭据。 */
     readonly readStoredCredential: () => OfficeAceCredential | undefined;
+    /**
+     * ★★★ **记下「本会话实际在用哪个号」**（2026-11-26 上游审计第二轮第 5 条）。
+     *
+     * ## 缺陷（审计原话）
+     *
+     * > 「`setActiveAccount` 调用点 **全仓只有 `resolver:728` 一处**；
+     * >   codearts / officeace **自建选号 ⇒ 从不写 `activeAccount`**（实测 `undefined`）
+     * >   ⇒ 对原报障两家**零作用**（仍参照下拉框）。」
+     *
+     * ⇒ 用户实际报障的两家恰恰吃不到「原点参照 = 主代理实际在用账号」这个新方向。
+     *
+     * ## 为什么是回调而不是直接传 pool
+     *
+     * 本模块对池只声明了**结构化最小接口**（`subagentPool`），直接传整个 `AccountPool`
+     * 会把「本模块需要什么」这个信息淹没 —— 也违背本模块既有的注入风格。
+     *
+     * ⚠️ **可选**：不注入时行为与改动前逐字节相同（单测替身 / 旧嵌入方）。
+     * ⚠️ `accountId === undefined` ⇒ **清空**（本次没选中任何号），
+     *    否则过期 id 会让子代理参照一个早已不用的号。
+     */
+    readonly reportActiveAccount?: (sessionId: string, accountId: string | undefined) => void;
     /**
      * 读某个账号的订阅分桶。
      *
@@ -136,6 +199,15 @@ export interface OfficeAceLockDeps {
      * 并**钳制到 `windowMs` 以内**（两个窗口是嵌套关系，见 `buddy-balance-rank.ts`）。
      */
     readonly imminentWindowMs?: () => number;
+    /**
+     * ★★★ **子代理起点分配的池读能力**（2026-11-25，可选）。
+     *
+     * 本家**自建选号** ⇒ 用户给子代理配的起点策略原先对它**完全无效且零报错**。
+     *
+     * ⚠️ **必须可选**：单测替身与嵌入方不实现它 ⇒ 缺失时走既有路径
+     *（`decideSubagentStart` 内部全是可选链 ⇒ 恒判「没配」⇒ 选号逐字节不变）。
+     */
+    readonly subagentPool?: SubagentStartPoolLike;
 }
 /**
  * 三个桶的合计。

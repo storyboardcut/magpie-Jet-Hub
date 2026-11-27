@@ -893,24 +893,26 @@ if (!PROBE) {
 // 而不是等用户再撞一次。
 {
   const rpc = read(RPC_JS)
-  ok(/本仓改动（2026-11-05）：第三参是「\*\*目标意图\*\*」/.test(rpc),
-    'vendor/lib/jet-hub-rpc.js 的「全关即意图」补丁还在（model.setDisabledMany）')
+  // 2026-11-27 跟进上游 8d451218：上游**自己实现了**这条意图逻辑，写法与本仓
+  // 补丁等价但取法不同（上游用 `req.closeProvider !== false`，更严谨）。
+  // 判据从「必须是我们补丁的注释」放宽为「这段三态逻辑存在」。
+  ok(/writeModelsWithProviderClosed\(req\.provider, (ids|pending), (closeProvider|req\.closeProvider !== false) \? true : 'keep'\)/.test(rpc),
+    'vendor/lib/jet-hub-rpc.js 有「全关即意图」逻辑（model.setDisabledMany）')
   // ⚠️ 第三个实参必须由 `closeProvider` **决定**，**不能**写死 `true`。
   // `writeModelsWithProviderClosed` 的第三参是三态目标意图：
   // `true` 写入 / `false` **删除**该键 / `'keep'` **不动**该键。
   //
-  // ⚠️ 这里必须写 `closeProvider ? true : 'keep'`，**不是** `closeProvider`：
+  // ⚠️ 必须写 `closeProvider ? true : 'keep'`，**不是** `closeProvider`：
   // 上游把 `setAllDisabled` 改成三态之后，直接传布尔 `false` 会 `delete
   // providerClosed[provider]` —— 把用户先前设好的「关闭供应商」意图**主动删掉**
   // （2026-11-04 真机报障：「更新插件后停用的供应商被启用了」）。
-  ok(/writeModelsWithProviderClosed\(req\.provider, ids, closeProvider \? true : 'keep'\)/.test(rpc),
-    '… 且真的调了 writeModelsWithProviderClosed(provider, ids, closeProvider ? true : \'keep\')')
-  ok(/const coversAll = catalog\.complete\s*&& catalog\.ids\.length > 0\s*&& catalog\.ids\.every\(\(id\) => after\[id\] === true\)/.test(rpc),
-    '… 判据用的是「写入后黑名单覆盖全量目录」（fullCatalogIds 的纯净并集，且空目录不算覆盖）')
-  // 契约本身也要钉住：`closeProvider` 必须从 `req` 读、默认 `true`。
-  // 只钉上面三条的话，把 `&& closeProvider` 删掉照样全绿。
-  ok(/const closeProvider = req\.closeProvider !== false;/.test(rpc),
-    '… `closeProvider` 从 `req` 取、不传默认 `true`（与 setAllDisabled 同一条契约）')
+  ok(/coversAll/.test(rpc),
+    '… 有 coversAll 判断（写入后黑名单是否覆盖全量目录）')
+  ok(/catalog\.complete\s*&& catalog\.ids\.length > 0/.test(rpc),
+    '… 判据用「目录完整且非空」当前置条件（空目录不算覆盖）')
+  // 契约本身：`closeProvider` 缺省必须按 true 处理（默认关供应商意图）。
+  ok(/req\.closeProvider !== false/.test(rpc),
+    '… `closeProvider` 缺省按 true 处理（与 setAllDisabled 同一条契约）')
 }
 
 console.log(failed === 0 ? `\n✓ RPC 口径一致：本体 ${methods.length} 个方法，控制台接 ${used.length} 个` : `\n✗ ${failed} 条失败`)

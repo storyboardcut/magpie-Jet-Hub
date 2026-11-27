@@ -361,7 +361,23 @@ export interface RpcCreateAccountRequest {
      * ⚠️ 来自客户端自报的 RPC 载荷（无 schema 校验）⇒ 读取侧按字面量白名单判，
      * 未登记的值一律当作缺省路径（**不报错、不静默改变语义**）。
      */
-    mode?: 'local-browser' | 'browser' | 'magpie-import';
+    /**
+     * `'cookie'`（**仅豆包**，2026-11-26）：用户从自己浏览器登录豆包后把
+     * `Cookie` 请求头整段粘进来，宿主解析 `sessionid` 落库。
+     *
+     * ⚠️ 为什么要有这条路：豆包扫码在「扫码后」强制要 SDK 现场算的
+     * `sign/qs/a_bogus`（绑定当次 query，纯 HTTP 造不出来），扫码登录在
+     * 无浏览器环境下必然卡在 `2156 服务繁忙`。粘 cookie 不经过 passport 的
+     * 强校验，是等价且稳定的入口。
+     */
+    mode?: 'local-browser' | 'browser' | 'magpie-import' | 'cookie';
+    /**
+     * 粘贴的豆包 cookie 串（**仅 `mode: 'cookie'`**）。
+     *
+     * 允许整段 `Cookie: a=1; b=2` 头，也允许只给 `sessionid=…`；解析时统一
+     * 归一化。凭据里只存这份 cookie 与由 `sessionid` 派生的设备身份。
+     */
+    cookie?: string;
     /**
      * 手机号（**仅 Loomy 需要**）。
      *
@@ -1130,6 +1146,19 @@ export interface RpcCreditsBalanceExtra {
 export interface RpcCreditsBalancesResponse {
     accounts: RpcCreditsBalanceAccount[];
     /**
+     * ★★★ **两个积分阈值**（2026-11-27 正向审计挖出）。
+     *
+     * ⚠️ 这对字段**此前完全不存在** ⇒ `src/usage-badge.ts` 透传时读不到 ⇒
+     * 客户端 `value?.imminentFloor` **恒 `undefined`** ⇒ 整条「按阈值降档」的
+     * 客户端链路是**死接线**（胶囊可用积分、弹窗排序全按 0 跑，与服务端选号分叉）。
+     *
+     * ⚠️ 它靠「对象 spread」逃过 tsc：读不存在的属性得到 `undefined` 是合法 TS。
+     * ⇒ **类型缺字段 = 运行时静默失效**。
+     */
+    imminentFloor?: number;
+    /** ★ 纯短期下限（`expiring - imminent` ≤ 它 ⇒ 按永久排队）。 */
+    expiringFloor?: number;
+    /**
      * ★★★ **本次读数是否来自磁盘缓存**（2026-11-21，仅供客户端**内部**判断）。
      *
      * ## 为什么需要它
@@ -1844,7 +1873,7 @@ export interface RpcModelSetDisabledManyRequest {
     modelIds: string[];
     disabled: boolean;
     /**
-     * 关闭方向是否同时落「供应商关闭」意图。默认 `true`。
+     * 关闭方向是否同时落「供应商关闭」意图。默认 true。
      *
      * ⚠️ 与 {@link RpcModelSetAllDisabledRequest.closeProvider} 同一条契约 ——
      * 两个入口写的是同一张黑名单，不给这条就会出现「同一份黑名单状态经两个入口
@@ -2340,6 +2369,17 @@ export interface RpcCreditWindowResponse {
      * 静默改写会让用户以为保存失败或行为异常。
      */
     clamped: boolean;
+    /**
+     * ★★★ **临期档的积分下限**（2026-11-27 用户需求）。
+     *
+     * `0` = 关闭（不降级）。
+     *
+     * ⚠️⚠️ **必须回传**（上游审计 D2）：不回传 ⇒ 面板回填恒空 ⇒
+     * 用户看不到自己设过的阈值，而且**清不掉它**（清除判据依赖这个值）。
+     */
+    imminentFloor?: number;
+    /** ★★★ **短期档的积分下限**（同上）。`0` = 关闭。 */
+    expiringFloor?: number;
 }
 /**
  * RPC: per-provider 积分分档窗口的**写入**请求。
@@ -2408,6 +2448,24 @@ export interface RpcCreditWindowSetRequest {
     provider: string;
     windowDays?: number;
     imminentDays?: number;
+    /**
+     * ★★★ **临期档的积分下限**（2026-11-27 用户需求）。
+     *
+     * 临期剩余 **≤ 该值** ⇒ 不算临期 ⇒ 降级按「短期」排队。
+     *
+     * | 传入 | 行为 |
+     * |---|---|
+     * | `undefined`（不传该键）| **不动**（合并语义，与 `windowDays` 一致）|
+     * | **`0`** | **关掉阈值**（用户主动清除）|
+     * | `> 0` | 设该下限 |
+     *
+     * ⚠️⚠️ **`0` 与「不传」是两件事**：前者是用户的清除意图，后者是「这次没提它」。
+     *   若把 `0` 也当成「不传」，用户**永远关不掉已设的阈值**
+     *   （面板空着、实际还在降级）—— 这是「保存了但没生效」的经典形态。
+     */
+    imminentFloor?: number;
+    /** ★★★ **短期档的积分下限**（同上）。语义逐字相同。 */
+    expiringFloor?: number;
     /**
      * ★ 子代理专属设置（2026-11-23）。
      *

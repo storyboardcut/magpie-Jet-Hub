@@ -94,21 +94,16 @@ export declare class BackupFormatError extends Error {
 /** 导入选项。 */
 export interface BackupImportOptions {
     /**
+     * ⚠️ 本仓改动（2026-10-31）：replace 模式下不写载荷里的模型黑名单，改用本机现值。
+     * CLI 的 --keep-disabled 是它的反向意图来源。
+     */
+    keepDisabledModels?: boolean;
+    /**
      * 导入模式，缺省 `replace`（整体替换，保持既有行为）。
      *
      * `merge` = 只追加、按 id 跳过已存在的账号，不碰黑名单与锁定表。
      */
     mode?: BackupImportMode;
-    /**
-     * 为真时「覆盖」也不写载荷里的模型黑名单，改用本机现值（2026-10-31 本仓改动）。
-     *
-     * 备份里的黑名单是导出那一刻的状态；整份还原会把旧机器上关掉的模型全关到新机器，
-     * 而控制台已没有模型开关，用户没有界面能清掉它们。
-     *
-     * ⚠️ 与 CLI 的 `--keep-disabled` **意图相反**：那个开关是「把备份里的黑名单写回」
-     * （见 scripts/import-backup.mjs，它直接改 pool，不走这个参数）。
-     */
-    keepDisabledModels?: boolean;
 }
 /**
  * 导出账号 + 凭据 + 模型黑名单。

@@ -558,7 +558,29 @@ export function rotateFromPreferred(ranked, options = {}) {
     const startAccount = ranked[anchor];
     const anchorTier = buddyBalanceTier(startAccount, options);
     /** 分档边界用未锁定口径（`none` 档在锁定态可能是「只剩永久」，会混淆分组）。 */
-    const tierRankOf = (account) => buddyBalanceTier(account, { allowPermanent: true });
+    /**
+     * ★★★★ **分档口径必须带上积分阈值**（2026-11-27 对抗审计 P1，阻断级）。
+     *
+     * ## 原来的 bug：同一个函数里两套判据
+     *
+     * 上面 `anchorTier = buddyBalanceTier(startAccount, options)` **认** `imminentFloor` /
+     * `expiringFloor`，而这一行只传 `{ allowPermanent: true }` ⇒ **floor 盲**。
+     *
+     * 后果：`rotateFromPreferred` 的所有重排（`:740` / `:782` / `:817` / `:863`）都用**错误的档位**
+     * ⇒ **配了轮换起点（`rotationStartId`）时，积分阈值完全失效**。
+     * 实测（审计原文）：`floor=20` 仍选**临期只剩 5** 的号。
+     *
+     * ⚠️ 而「配了轮换起点」是常见配置 ⇒ 这个缺陷会让**阈值功能在那些用户身上等于没做**。
+     *
+     * ⚠️ `allowPermanent: true` **必须保留** —— 注释写明「分档边界用**未锁定**口径」，
+     *    否则 `none` 档在锁定态会被认成「只剩永久」，分组边界会错。
+     *    ⇒ 只补 floor，不动这一格。
+     */
+    const tierRankOf = (account) => buddyBalanceTier(account, {
+        allowPermanent: true,
+        ...options.imminentFloor === undefined ? {} : { imminentFloor: options.imminentFloor },
+        ...options.expiringFloor === undefined ? {} : { expiringFloor: options.expiringFloor },
+    });
     const anchorRank = tierRankOf(startAccount);
     /**
      * ★★★★ **S6：起点只在「还持有选定那一档」时占首位**（2026-11-20，第四次修订）。
@@ -731,10 +753,64 @@ export function buddyBalanceTier(balance, options = {}) {
      * ⚠️ 两个「会作废」的档**必须在 `allowPermanent === false` 之前判**：
      * 临期与短期都在 15 天内 ⇒ 锁定时**仍可烧**。这保证「锁定永久积分」的
      * 可用性判据与引入临期档**之前逐字节相同**（那是最不能回归的一格）。
+     *
+     * ★★★ **积分下限（2026-11-27 用户需求）**：
+     *
+     * 判据从 `> 0` 变成 `> floor`（`floor` 缺省 0）。用户要的是「低于 20 就不再算临期，
+     * 归入短期」—— 即剩余**不足**该值时不占用这一档，**提前切走**，
+     * 免得系统把它临期烧光**再吃部分短期**（那会污染下一档）。
+     *
+     * ⚠️⚠️ **`>` 不是 `>=`**：`floor` 缺省 0 时 `remaining > 0` 正是改动前语义
+     * （零回归）。写成 `>=` 会让「剩余恰好 0」也算该档，与现状分叉。
+     *
+     * ⚠️ **降级不浪费**：这里只决定「按哪一档排队」，不改「烧包顺序」——
+     *   轮到这个号时它那点临期照样先烧（用户第 6 条定案）。
+     *
+     * ⚠️ **锁定永久时降级到 `none` 而不是 `permanent`**：两条 floor 判据都在
+     *   `allowPermanent === false` 之前 ⇒ 临期低 → 短期低 → **none**（不去烧永久）。
      */
-    if (positiveOrZero(balance.imminentBalance) > 0)
+    const imminentFloor = positiveOrZero(options.imminentFloor);
+    const expiringFloor = positiveOrZero(options.expiringFloor);
+    const imminent = positiveOrZero(balance.imminentBalance);
+    const expiring = positiveOrZero(balance.expiringBalance);
+    /**
+     * ★★★ **临期档**：剩余不足阈值 ⇒ 降级（不占这一档）。
+     */
+    if (imminent > imminentFloor)
         return BUDDY_BALANCE_TIER.imminent;
-    if (positiveOrZero(balance.expiringBalance) > 0)
+    /**
+     * ⚠️⚠️ **短期档必须判「纯短期量」，不能判母量 `expiring`**
+     *（2026-11-27 用户需求修正 —— 这是一个**真缺陷**）。
+     *
+     * ## 用户原话
+     *
+     * > 「临期低于 20 就不再算临期了，归入短期；**短期低于 30 就不算短期了，
+     * >   自动归入长期**」
+     *
+     * ## 缺陷（实测）
+     *
+     * `expiring` 是**母量**（= 临期 + 短期，见 `BuddyCreditSplit.expiring` 的注释）。
+     * 用它做判据 ⇒ 只要还有一点临期，`expiring` 就会被抬高：
+     *
+     * | 号 | 母量 `expiring` | 纯短期 | 阈值 30 时**正确**结果 |
+     * |---|---|---|---|
+     * | 临期 5 / 纯短期 28 | **33** | **28** | 28 < 30 ⇒ **归入长期** |
+     * | 用母量判 | `33 > 30` ✅ | — | 仍算短期 🚨 **与用户要求相反** |
+     *
+     * ⇒ **纯短期 = `expiring - imminent`**（母量减去临期子量）。
+     *
+     * ## ⚠️ 为什么不能直接用 `imminent` 抵消
+     *
+     * 只在「临期判据已经失败」之后才走到这里 ⇒ 此时该号的临期要么是 0、
+     * 要么已不足 `imminentFloor`。两种情况下 `expiring - imminent` 都是
+     * **真正可用的短期量**，正是用户要判的东西。
+     *
+     * ⚠️ 若改成 `shortTerm > expiringFloor` 而**后端 split 没暴露 shortTerm**，
+     *   就得改 `BuddyCreditSplit` 的形状 —— 那是更大的改动面。
+     *   `expiring - imminent` 与它**等价**（`shortTerm = expiring - imminent`）。
+     */
+    const pureShortTerm = Math.max(0, expiring - imminent);
+    if (pureShortTerm > expiringFloor)
         return BUDDY_BALANCE_TIER.expiring;
     if (options.allowPermanent === false)
         return BUDDY_BALANCE_TIER.none;

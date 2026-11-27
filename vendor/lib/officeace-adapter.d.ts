@@ -46,7 +46,18 @@ import { type OfficeAceCredential } from './officeace-auth.js';
 export declare function maasBaseUrlOf(credential: OfficeAceCredential): string;
 export interface OfficeAceAdapterOptions {
     /** 凭据（测试注入）；缺省每次从本机读取。 */
-    credentialProvider?: () => Promise<OfficeAceCredential | undefined>;
+    /**
+     * 取当前可用凭据。
+     *
+     * ★ **2026-11-25：可选收 `sessionId`** —— 子代理起点分配要用它
+     * （本家**自建选号**，不走 `createCredentialResolver`，
+     *  而子代理设置原先对它**静默无效、零报错**）。
+     *
+     * ⚠️ **保持向后兼容**：既有嵌入方传的是**零参函数**，多一个可选参数
+     *    不影响它们（传 `(` 时那个参数就是 `undefined`）。
+     * ⚠️ 未传 / 传 `undefined` ⇒ 选号与改动前**逐字节相同**。
+     */
+    credentialProvider?: (sessionId?: string) => Promise<OfficeAceCredential | undefined>;
     /**
      * **只读目录探测**专用凭据（`listModels` 的 `/v2/models` 探测与倍率读取）。
      *
@@ -151,6 +162,10 @@ export declare class OfficeAceAdapter extends LlmAdapter {
      *
      * ⚠️ 刷新失败（refresh_token 已消费）返回旧凭据 —— 推理可能仍可用
      *（MaaS Basic 凭据与 STS 生命周期不同步）；真正失效由 stream 的 401 报错兜底。
+     */
+    /**
+     * @param sessionId 当前会话 id（**可选**；来自 `GenerateOptions.sessionId`）。
+     *   ⚠️ 只用于**子代理起点分配**，不参与凭据解析本身。
      */
     private resolveCredential;
     /**

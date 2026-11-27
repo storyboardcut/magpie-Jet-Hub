@@ -27,6 +27,8 @@
  */
 import { credentialRef } from '@deepseek-ai/dsh-credentials';
 import { dedupeMinimaxAccount } from './minimax-dedup.js';
+// 豆包 cookie 导入的文本归一化（2026-11-26，见 src/doubao-cookie.ts 模块头）。
+import { normalizePastedCookie } from './doubao-cookie.js';
 import { codeArtsBenefitModelIds } from './models.js';
 import { openIncognitoWindow } from './login.js';
 import { asProxyText, isPolicyBlockedAccount } from './account-pool.js';
@@ -127,7 +129,7 @@ import {
 //    （buddy 系的凭据是 `{expiresAt}`，Marvis 的是毫秒**字符串**）。
 credentialExpiresAtMs as marvisCredentialExpiresAtMs, marvisAccountLabel, parseMarvisCredential, } from './marvis.js';
 import { isAstudioRefreshable } from './astudio.js';
-import { loginNeedsExternalAction } from './login-failure.js';
+import { loginNeedsExternalAction, markLoginNeedsExternalAction } from './login-failure.js';
 import { pollAstudioWechatScan, bindAstudioWechatSession, startAstudioLoginFlow, } from './astudio-oauth.js';
 // ⚠️ **本 fork 独有**（modelscope，2026-10-16）。
 import { MODELSCOPE } from './modelscope-product.js';
@@ -199,7 +201,7 @@ import { pickTestModel, resetAccount, resetAllAccounts, retestAccount, retestAll
 import { exportBackup, importBackup } from './backup.js';
 import { handleOpencodeRpc } from './opencode-rpc.js';
 import { handleSyncRpc } from './sync-rpc.js';
-import { geminiFetchForAccount } from './gemini-proxy.js';
+import { GEMINI_LOGIN_NETWORK_FALLBACK, geminiFetchForAccount, geminiNetworkHint, isBareFetchFailure } from './gemini-proxy.js';
 import { qoderFetchForAccount } from './qoder-proxy.js';
 import { minimaxIntlFetchForAccount } from './minimax-proxy.js';
 import { normalizeProxy } from './minimax-proxy.js';
@@ -2708,13 +2710,6 @@ function registerJetHubEndpoints(ctx, pool, auths, modelAdapters) {
      */
     const magicrewProfileTried = new Set();
     /**
-     * ⚠️⚠️ **豆包（Doubao）扫码登录的在途任务**（与 `magicrewBrowserLoginInFlight`
-     * 同型，2026-11-03 接入）：`account.create`（`mode: 'browser'`）起一轮
-     * 「开可见浏览器 → 等用户扫码 → `Storage.getCookies` 读 cookie+设备身份 → 落库」，
-     * `login.poll` 单飞 `await` 它（客户端 1 秒一拍、无闸门，两拍重叠会开两个窗口）。
-     */
-    const doubaoLoginInFlight = new Map();
-    /**
      * 网页版登录占位条目的**最短保留时长**（收口阈值）。
      *
      * 客户端自己的轮询上限是 5 分钟、宿主侧等待上限 4 分钟（
@@ -2758,6 +2753,37 @@ function registerJetHubEndpoints(ctx, pool, auths, modelAdapters) {
      * 与后续轮询读表，必须是**逐字相同**的一句话 —— 两处各写一份必然漂移，
      * 用户会看到「第一次说 A、再点一次说 B」。
      */
+    /**
+     * ★★★ **Gemini 登录失败的可操作包装**（2026-11-26，issue #170）。
+     *
+     * ## 报障
+     *
+     * 面板只显示「登录失败：**fetch failed**。请重新点击「+ 新建账号」。」
+     * —— 两句话**都是死路**：`fetch failed` 不带任何原因（真因在 `error.cause`），
+     * 而 Gemini 登录失败**重试一百次也不会成功**（Google 在墙外、插件进程不读系统代理）。
+     *
+     * ## 修法
+     *
+     * 1. 用 `geminiNetworkHint`（全仓唯一一份判据）把「为什么」和「怎么办」接上 ——
+     *    文案明写「浏览器能授权是因为浏览器读系统代理，插件进程不读」，
+     *    这正是用户最困惑的那一点（浏览器明明成功了）。
+     * 2. 标 `markLoginNeedsExternalAction` ⇒ `loginFailureMessage` 会**去掉**
+     *    「请重新点击「+ 新建账号」」那半句假出路（与 OfficeAce / AStudio 同款）。
+     *
+     * ⚠️ hint 为 `undefined`（不是网络类失败）⇒ **原样返回**，不加任何东西
+     *   —— 「拿不准就别标」是 `login-failure.ts` 的既定纪律。
+     */
+    function geminiLoginFailure(error) {
+        // ① 先走全仓唯一判据（吃 cause 链的错误码，更有信息量）；
+        // ② 拿不到码、但确实是 `fetch failed` ⇒ 用 Gemini 专属兜底
+        //    （用户报障截图里正是**裸**的 `fetch failed`，不加这条修复会静默空跑）。
+        const hint = geminiNetworkHint(error, false)
+            ?? (isBareFetchFailure(error) ? GEMINI_LOGIN_NETWORK_FALLBACK : undefined);
+        if (hint === undefined)
+            return error;
+        const base = error instanceof Error ? error : new Error(String(error));
+        return markLoginNeedsExternalAction(new Error(`${base.message}；${hint}`));
+    }
     function loginFailureMessage(reason) {
         const text = loginReasonText(reason);
         // ⚠️⚠️ **「请重新点击「+ 新建账号」」只在重试可能有意义时才加**（2026-10-20 用户报障）。
@@ -5058,24 +5084,97 @@ function registerJetHubEndpoints(ctx, pool, auths, modelAdapters) {
                     };
                 }
                 /**
-                 * ⚠️⚠️ **豆包（Doubao）扫码登录**（`mode: 'browser'`，2026-11-03 接入）。
+                 * ## 豆包（Doubao）登录：**无浏览器两条腿**（2026-11-25 起）
                  *
-                 * 与 magicrew 的 `mode: 'browser'` 同型三段式：
-                 * ① 占位条目（先登记再开窗，`login.poll` 靠它知道「id 存在」）；
-                 * ② 后台任务：`DoubaoLoginSession.open()`（可见窗口 + 一次性 profile）→
-                 *    `waitForCredential()`（轮询 `sessionid`，最长 4 分钟）→ 落库 → 回填；
-                 * ③ 立刻返回 `{ accountId, loginUrl: '' }`。
+                 * | mode | 形态 | 需要浏览器 |
+                 * |---|---|---|
+                 * | `'qr'`（**缺省**） | 宿主调 passport 接口取码 → 面板内画二维码 → 轮询扫码状态 | **不需要** |
+                 * | `'cookie'`（2026-11-26） | 用户粘贴浏览器里的 `Cookie` 头 → 解析 `sessionid` → 落库 | **不需要** |
                  *
-                 * ⚠️ **账号隔离**：每次登录一个全新临时 profile ⇒ 该账号的 cookie 与
-                 *    device_id/web_id 都是**本账号自己的**（一次性 profile 天然产出独立
-                 *    设备身份，实测见 `doubao-login.ts` 的端到端验证）。
+                 * ⚠️ 2026-11-25 起**浏览器腿已删除**：这条实现需要运行环境里有可驱动的
+                 *    Chromium，容器 / 无桌面服务器上不可用（不特指某一种部署形态）。
                  *
-                 * ⚠️ **判重**：cookie 里的 `sessionid` 值即账号指纹 —— 同一账号重复登录
-                 *    只刷新既有条目，不造第二张卡。
-                 *
-                 * ⚠️ 失败收尾走 `failLogin`（不自己 `removeAccount`）。
+                 * ⚠️ 为什么后来加了 `'cookie'`：豆包扫码在**扫码后**强制要求 SDK 现场算的
+                 *    `sign` / `qs` / `a_bogus`（三者绑定当次请求的 query，纯 HTTP 造不出来），
+                 *    无浏览器环境必然卡在 `error_code=2156 服务繁忙`。扫码前一切正常，因此
+                 *    症状是「二维码能出、能扫、扫完永远不消失」。粘 cookie 不经过 passport
+                 *    的强校验，是同一份登录态的另一条入口。
                  */
-                if (provider === 'doubao' && req.mode === 'browser') {
+                /**
+                 * 落库（两条腿共用）：按 `sessionid` 判重 → 刷新既有条目或写自己的 ref。
+                 *
+                 * ⚠️ 判重键是 **`sessionid`**（账号稳定身份），不是整串 cookie：重登会换
+                 * `ttwid` / `sid_tt` 等，拿整串判重会「每登一次多一张卡」。
+                 */
+                const landDoubaoCredential = async (credential) => {
+                    const fingerprint = doubaoSessionIdOf(credential);
+                    if (fingerprint !== undefined) {
+                        for (const existing of pool.listAccountsByProvider('doubao')) {
+                            if (existing.id === id)
+                                continue;
+                            let existingFingerprint;
+                            try {
+                                const resolved = await ctx.credentials.resolve(credentialRef(existing.credentialRef));
+                                existingFingerprint = resolved === undefined
+                                    ? undefined
+                                    : doubaoSessionIdOf(JSON.parse(resolved.value));
+                            }
+                            catch {
+                                existingFingerprint = undefined;
+                            }
+                            if (existingFingerprint !== fingerprint)
+                                continue;
+                            await ctx.credentials.set(credentialRef(existing.credentialRef), JSON.stringify(credential));
+                            await pool.updateAccount(existing.id, { nickname: '豆包账号' });
+                            await ctx.credentials.unset(credentialRef(refName)).catch(() => undefined);
+                            await pool.removeAccount(id).catch(() => undefined);
+                            return;
+                        }
+                    }
+                    await ctx.credentials.set(credentialRef(refName), JSON.stringify(credential));
+                    await pool.updateAccount(id, { nickname: '豆包账号' });
+                };
+                /**
+                 * ★★ **豆包 cookie 导入**（`mode: 'cookie'`，2026-11-26）。
+                 *
+                 * 用户在自己浏览器登录 www.doubao.com 后，把 `Cookie` 头整段粘进面板；
+                 * 这里解析 `sessionid`（账号稳定身份）、探活一次、然后与扫码腿共用
+                 * `landDoubaoCredential` 落库（同一 `sessionid` 会刷到既有卡上，不重复建号）。
+                 *
+                 * 探活是**只读**的（`landing/get`，不发签到）：有效会话回 `code:0`，
+                 * 失效会话回 `710012001 登录已过期`。⚠️ 探活**失败但不确定**时放行 ——
+                 * 一次网络抖动不该把有效 cookie 拒掉，真失效留到首次签到暴露。
+                 */
+                if (provider === 'doubao' && req.mode === 'cookie') {
+                    const log = (message) => { ctx.logger?.info?.(`[jet-hub] ${message}`); };
+                    const cookie = normalizePastedCookie(req.cookie);
+                    if (cookie.length === 0) {
+                        return {
+                            ok: false,
+                            error: { code: 'bad-request', message: '没有收到 cookie 内容：请把浏览器里的 Cookie 请求头整段粘贴进来（形如 sessionid=…; ttwid=…）' },
+                        };
+                    }
+                    const sessionid = doubaoSessionIdOf({ cookie });
+                    if (sessionid === undefined) {
+                        return {
+                            ok: false,
+                            error: { code: 'bad-request', message: '粘贴的 cookie 里没有 sessionid（豆包靠它识别登录态）。请确认是在已登录 www.doubao.com 的浏览器里复制的 Cookie 头。' },
+                        };
+                    }
+                    const credential = { cookie, accountKey: sessionid };
+                    // 探活 = 一次只读的签到状态请求（带 `a_bogus`，由 node:vm 沙箱签），
+                    // 只为识别「cookie 已过期」。网络/签名不稳一律放行，不拦用户建号。
+                    const { probeDoubaoSession } = await import('./doubao-signin.js');
+                    const probe = await probeDoubaoSession(JSON.stringify(credential), { log });
+                    if (probe.sessionOk === false) {
+                        return {
+                            ok: false,
+                            error: {
+                                code: 'bad-request',
+                                message: `豆包认为这份 cookie 已失效（${probe.code ?? '?'} ${probe.message ?? ''}）。请重新登录 www.doubao.com 后再复制一份新的 Cookie。`,
+                            },
+                        };
+                    }
                     await pool.addAccount({
                         id,
                         provider: 'doubao',
@@ -5085,107 +5184,54 @@ function registerJetHubEndpoints(ctx, pool, auths, modelAdapters) {
                         refreshable: false,
                         createdAt: Date.now(),
                     });
-                    const task = (async () => {
-                        const { DoubaoLoginSession } = await import('./doubao-login.js');
-                        /**
-                         * ⚠️⚠️ **`open()` 必须在 `try` 之内**（PR #29 审计返工，2026-11-13）。
-                         *
-                         * 首版是 `const session = await DoubaoLoginSession.open(…)` 写在 `try`
-                         * **外面**。而 `open()` 会抛的**最常见**情形恰恰是「用户机器上没有
-                         * Chrome / 豆包客户端」（`doubao-login.ts` 的
-                         * `doubaoLoginBrowserExecutable()` 返回 `undefined` ⇒ 直接 throw），
-                         * 其次是 CDP 30 秒未就绪。那时的实际后果是**三条同时发生**：
-                         *
-                         * 1. `failLogin` **不会被调用** ⇒ 占位账号（无凭据）永久留在池里，
-                         *    用户看到一张点不开的「豆包账号」卡片；
-                         * 2. 外层那条 `void (async () => { … })()` 的 catch 是**空块**（只有一句
-                         *    注释）⇒ 把 rejection **静默吞掉** ⇒ 日志零字，无从诊断；
-                         * 3. `doubaoLoginInFlight` 已被删 ⇒ `login.poll` 恒回 `{ done: false }`
-                         *    ⇒ 客户端转圈满 **5 分钟**（客户端自己的轮询上限）才报超时。
-                         *
-                         * 合起来正是本仓库登记过的缺陷形态：「登录失败只剩静默转圈 5 分钟」
-                         * + 幽灵账号（`docs/agent-notes/protocol-wire.md` 的 Issue IKLI7J）。
-                         *
-                         * 现在整段罩在一个 `try` 里：任何一步失败（开窗 / 扫码等待 / 落库 /
-                         * 回填）都走 `failLogin` 记终态（它自己先判 `loginCredentialLanded`：
-                         * **凭据已在 ⇒ 就当成功、不删号**），`finally` 收窗。
-                         */
-                        // ⚠️ 不能用 `InstanceType<typeof DoubaoLoginSession>` —— 它的构造器是
-                        //    **private**（只允许走静态 `open()`），`InstanceType` 的约束会拒绝。
-                        let session;
-                        try {
-                            session = await DoubaoLoginSession.open({
-                                log: (message) => { ctx.logger?.info?.(`[jet-hub] ${message}`); },
-                            });
-                            const credential = await session.waitForCredential(240_000);
-                            if (credential === undefined) {
-                                throw new Error('扫码登录未完成（超时或窗口已关闭）');
-                            }
-                            // 判重：sessionid 指纹命中既有条目 ⇒ 只刷新它，删掉占位条目。
-                            const fingerprint = doubaoSessionIdOf(credential);
-                            if (fingerprint !== undefined) {
-                                for (const existing of pool.listAccountsByProvider('doubao')) {
-                                    if (existing.id === id)
-                                        continue;
-                                    let existingFingerprint;
-                                    try {
-                                        const resolved = await ctx.credentials.resolve(credentialRef(existing.credentialRef));
-                                        existingFingerprint = resolved === undefined
-                                            ? undefined
-                                            : doubaoSessionIdOf(JSON.parse(resolved.value));
-                                    }
-                                    catch {
-                                        existingFingerprint = undefined;
-                                    }
-                                    if (existingFingerprint !== fingerprint)
-                                        continue;
-                                    await ctx.credentials.set(credentialRef(existing.credentialRef), JSON.stringify(credential));
-                                    await pool.updateAccount(existing.id, { nickname: '豆包账号' });
-                                    await ctx.credentials.unset(credentialRef(refName)).catch(() => undefined);
-                                    await pool.removeAccount(id).catch(() => undefined);
-                                    return { done: true, success: true };
-                                }
-                            }
-                            // 新账号：凭据写到自己的 ref。
-                            await ctx.credentials.set(credentialRef(refName), JSON.stringify(credential));
-                            await pool.updateAccount(id, { nickname: '豆包账号' });
-                            return { done: true, success: true };
-                        }
-                        catch (error) {
-                            const message = await failLogin(id, error);
-                            return message === undefined
-                                ? { done: true, success: true }
-                                : { done: true, success: false, error: message };
-                        }
-                        finally {
-                            // 无论成败都收窗（杀进程 + 删一次性 profile）。
-                            session?.close();
-                        }
-                    })();
-                    doubaoLoginInFlight.set(id, task);
-                    void (async () => {
-                        // ⚠️ 走到这里说明 `failLogin` **自己**抛了（它已在上面把业务失败收成返回值）：
-                        //    记一条 warn 再吞，绝不静默（否则又是「日志零字 + 转圈 5 分钟」）。
-                        try {
-                            await task;
-                        }
-                        catch (error) {
-                            ctx.logger?.warn?.(`[jet-hub] 豆包登录收尾异常（${id}）：${String(error)}`);
-                        }
-                        doubaoLoginInFlight.delete(id);
-                    })();
+                    /**
+                     * ## ⚠️ **写凭据失败必须撤卡**（2026-11-26 双审 P2，已实测复现）
+                     *
+                     * 顺序是「先 `pool.addAccount` 建卡、再 `landDoubaoCredential` 写凭据」。
+                     * 旧代码**没有兜底**：`landDoubaoCredential` 一旦抛错（磁盘满、凭据库只读、
+                     * `credentialRef` 冲突……），卡片已经落库而凭据没有 ⇒ 界面上留一张
+                     * **永远点不动的幽灵卡**，且：
+                     *
+                     * - 旧扫码路径有 `failLogin` 兜底，本分支是新写的、**没有接那条腿**；
+                     * - `doubao` 也**不在**统一收口白名单里（那白名单只管别的 provider）。
+                     *
+                     * ⇒ 这里显式 try/catch，失败就把刚建的卡**撤掉**，并如实回 `ok:false`。
+                     *   宁可让用户重贴一次，也不要留一张坏卡 —— 后者用户根本不知道该怎么办。
+                     */
+                    try {
+                        await landDoubaoCredential(credential);
+                    }
+                    catch (error) {
+                        await pool.removeAccount(id).catch(() => undefined);
+                        log('[doubao-cookie] 凭据写入失败，已撤回刚建的占位卡片');
+                        return {
+                            ok: false,
+                            error: {
+                                code: 'store-failed',
+                                message: `cookie 已解析成功，但写入凭据库失败：${error instanceof Error ? error.message : String(error)}。请检查磁盘空间/权限后重试。`,
+                            },
+                        };
+                    }
+                    log(`[doubao-cookie] 已导入 cookie（sessionid 判重）${probe.sessionOk === true ? '，探活通过' : '，未探活成功（按放行处理）'}`);
                     return { ok: true, value: { accountId: id, loginUrl: '' } };
                 }
                 /**
-                 * 豆包只有扫码登录（`mode: 'browser'`）一条路 —— 不带 mode 落到这里
-                 * ⇒ 明确报错，不静默降级。
+                 * 豆包**只有粘 cookie 一条路**（`mode: 'cookie'`，2026-11-26）。
+                 *
+                 * 原来的「面板内扫码」已于 2026-11-26 整体删除：豆包 passport 在**扫码后**
+                 * 强制要求 SDK 现场算的 `sign` / `qs` / `a_bogus`（三者绑定当次请求的
+                 * query），纯 HTTP 环境造不出来 ⇒ 必然卡在 `error_code=2156 服务繁忙`。
+                 * 四种请求形态逐一实测过，全部 2156；把浏览器原始签名抄过来也不认。
+                 *
+                 * ⇒ 这里对「不传 mode / `qr` / `browser`」的老客户端**明确报错**，告诉它
+                 *   改用 `mode: 'cookie'`，不静默降级、也不假装还在扫码。
                  */
                 if (provider === 'doubao') {
                     return {
                         ok: false,
                         error: {
                             code: 'bad-request',
-                            message: '豆包请用「扫码登录」（会打开浏览器窗口，用手机豆包 App 扫码）',
+                            message: '豆包只支持粘贴 cookie 登录（`mode: "cookie"`）：扫码登录已移除（扫码后上游强制要求签名，纯 HTTP 无法完成）。请点「+ 新建账号」→ 在弹窗里粘贴浏览器 Cookie。',
                         },
                     };
                 }
@@ -6233,8 +6279,33 @@ function registerJetHubEndpoints(ctx, pool, auths, modelAdapters) {
                         refreshable: false,
                         createdAt: Date.now(),
                     });
-                    if (geminiProxyInput !== '')
+                    if (geminiProxyInput !== '') {
                         await pool.setGeminiProxy(id, geminiProxyInput);
+                    }
+                    else {
+                        /**
+                         * ★★★ **≥2 个不同代理时也要借一个，并写回**（2026-11-26，issue #170 审计 P4）。
+                         *
+                         * ## 上面的继承只覆盖「恰好 1 个」
+                         *
+                         * `inheritedGeminiProxy` 的条件是 `existingGeminiProxies.size === 1`
+                         * —— 用户只有**一个**代理时，新号自动继承，这条早就通。
+                         *
+                         * ⇒ 但**两个以上**不同的代理时 `geminiProxyInput` 是空串 ⇒ 不落池 ⇒
+                         *   `geminiProxyForAccount(id)` 恒空。此时我加的登录回落
+                         *   （`geminiLoginFetchForAccount`）虽然能借到一个代理**把 token 换回来**，
+                         *   但**新账号自己的 `geminiProxy` 仍是空** ⇒ 登录成功后第一条消息走
+                         *   `geminiFetchForAccount` 又裸 `fetch` ⇒ **症状从「登录失败」原样搬成
+                         *   「发消息失败」**，而后者对用户更难归因。
+                         *
+                         * ⇒ 归属：**借来的出口必须落到新账号上**。用户之后可在账号卡片上改。
+                         *   （0 个代理时 `geminiProxyForAny()` 返回空 ⇒ 这里不写，与改动前一致；
+                         *     那种情形唯一的出路是登录失败文案里那句「先给任一账号配代理」。）
+                         */
+                        const borrowed = pool.geminiProxyForAny();
+                        if (borrowed !== '')
+                            await pool.setGeminiProxy(id, borrowed);
+                    }
                     let geminiStarted;
                     try {
                         // ⚠️ **必须传 `accountId`**（Gitee issue IKLTZ2）：换 token 那一次
@@ -6271,7 +6342,9 @@ function registerJetHubEndpoints(ctx, pool, auths, modelAdapters) {
                     }).catch((error) => {
                         ctx.logger.warn(`[jet-hub] background ${GEMINI.id} login failed for ${id}: ${String(error)}`);
                         // 登录失败：记终态原因（供 login.poll 报给前端）+ 移除占位条目，不留幽灵账号
-                        void failLogin(id, error);
+                        // ★ 附可操作提示 + 去掉假出路（issue #170）：`fetch failed` 本身零信息量，
+                        //   而「重新点新建账号」对墙外失败是死路（Google 在墙外，插件进程不走系统代理）。
+                        void failLogin(id, geminiLoginFailure(error));
                     });
                     return { ok: true, value: { accountId: id, loginUrl: geminiStarted.loginUrl } };
                 }
@@ -6937,8 +7010,37 @@ function registerJetHubEndpoints(ctx, pool, auths, modelAdapters) {
                  */
                 const mine = all.filter((a) => a.provider === req.provider && a.enabled !== false);
                 /**
-                 * ★★★ **子代理会话：显示它实际使用的账号位次**
-                 *（2026-11-24 用户需求）。
+                 * ⚠️⚠️ **这里曾堆了三段互相矛盾的 JSDoc，已重写为下面这一段**（2026-11-27）。
+                 *
+                 * ⚠️ 是「重写」不是「合并成一个块」—— 上面 `mine` 那段 JSDoc 仍在（它讲的是
+                 * 「两边同口径只数启用账号」，与本段无关），本段替换的是**原先堆在这里的三段**。
+                 *
+                 * | 段 | 曾声称 | 实际 |
+                 * |---|---|---|
+                 * | 1 | 「子代理的账号记在 `pinnedAccountId` 里，用 pin 的 id 当起点」| ❌ 该机制已删 |
+                 * | 2 | 「三级优先级：`userPickedAccountId` > `pinnedAccountId` > `preferredRotationFor`」| ❌ 前两级已删 |
+                 * | 3 | 「统一存在 `preferredRotation`」| ◐ **仅「有档位的付费腿」成立**（见下）|
+                 *
+                 * ⚠️ **第 3 段那句话也是过度概括**（2026-11-27 正向审计实测）：真正落到
+                 * `preferredRotation` 的**只有「有档位的付费腿」**。其余三处各有去路 ——
+                 *
+                 * | 情形 | 实际存哪 |
+                 * |---|---|
+                 * | 无档位 provider | `setSubagentStartPosition`（**生产零读者**）|
+                 * | codearts / officeace | **逐请求现算**，不落盘 |
+                 * | buddy 免费腿 | **不落盘**（`:774`）|
+                 *
+                 * ⇒ 引用这句话时要带这个限定，别当成「所有 provider 都统一了」。
+                 *
+                 * 前两段是 `ff7cf8f9`（「子代理起点统一为 preferredRotation —— 净删 1422 行」）
+                 * **之前**的形态。`AccountPool` 上已无 `pinSubagentAccount` /
+                 * `setUserPickedAccount`（`subagent-dead-residuals.spec.ts` 有守卫盯着）。
+                 *
+                 * ⇒ 三段叠罗汉正是「同一语义多套说法」的温床：读代码的人无法判断哪份可信。
+                 *   **过时注释比没有注释更糟。**
+                 */
+                /**
+                 * ★★★ **子代理起点只读 `preferredRotation` 一处**（2026-11-25 重构后）。
                  *
                  * ## 用户原话
                  *
@@ -6947,57 +7049,12 @@ function registerJetHubEndpoints(ctx, pool, auths, modelAdapters) {
                  * >   ……我想要子代理对话页面，达到跟主代理对话页面一样的效果，
                  * >   从页面就能看出这个对话是跟哪个帐号在进行的」
                  *
-                 * ## 缺陷
+                 * ## 实现
                  *
-                 * `preferredRotation` 是**按 sessionId 单独配置**的表 —— 用户只会在
-                 * **主代理**会话里选起点，子代理的 sessionId 永远不在那张表里
-                 * ⇒ `preferredRotationFor()` 返回 `undefined` ⇒ 胶囊显示「默认」
-                 * ⇒ 用户看不出子代理在用哪个号。
-                 *
-                 * ## 修法
-                 *
-                 * 子代理的账号是**自动分配**的（`subagentAssignments[provider][sid]`），
-                 * 记在 `pinnedAccountId` 里。⇒ 该会话是子代理时，用 pin 的 id 当
-                 * 「起点」去算位次。
-                 *
-                 * ## ⚠️ 三态语义（必须与胶囊的既有渲染对齐）
-                 *
-                 * | 情况 | `selectedPosition` | 胶囊显示 |
-                 * |---|---|---|
-                 * | 主代理 + 选了起点 | 位次数字 | 「位次 N」|
-                 * | 主代理 + 没选 | `null` | 「默认」|
-                 * | **子代理 + 已 pin** | **位次数字** | **「位次 N」** ← 本改动 |
-                 * | 子代理 + 未 pin（首轮还没选）| `null` | 「默认」|
-                 *
-                 * ⚠️ **只读、不写**：主代理那条腿仍走 `preferredRotationFor`，本改动
-                 * 不碰 `preferredRotation` 表（否则会把「自动分配」污染成「用户选择」，
-                 * 下次主代理打开下拉框会看到一个它没选过的值）。
-                 *
-                 * ⚠️ **优先级**：子代理的 pin **优先于** `preferredRotationFor`
-                 * —— 万一某子代理的 sessionId 恰好也在 `preferredRotation` 里（不可能
-                 * 但防御），行为应是「显示它实际用的号」，而不是「用户给它选的起点」。
+                 * 子代理的起点（含「用户手选」）**统一存在 `preferredRotation`** ——
+                 * 与主代理**同一个地方** ⇒ 读它一处即可，没有第二级、第三级。
                  */
-                /**
-                 * ★★★ **三级优先级，与 `credential-resolver.ts` 逐字同构**
-                 *（2026-11-24 用户定 B 方案）。
-                 *
-                 * | 级 | 来源 | 含义 |
-                 * |---|---|---|
-                 * | ① | `userPickedAccountId` | **用户手动选的** |
-                 * | ② | `pinnedAccountId` | 系统拉起时固定/重算的 |
-                 * | ③ | `preferredRotationFor` | 主代理那条腿（子代理恒 undefined）|
-                 *
-                 * ⚠️ 顺序**必须与 resolver 一致**，否则会出现「弹窗显示位次 3、
-                 * 实际用位次 5」这种自相矛盾的界面 —— 用户会以为保存失败了。
-                 *
-                 * ⚠️ 主代理没有分配记录 ⇒ 前两级都是 `undefined` ⇒ 走 `preferredRotationFor`
-                 *   （与改动前逐字相同，零回归）。
-                 */
-                const subagentAssign = pool.subagentAssignmentOf?.(req.provider, req.sessionId);
-                const subagentPin = subagentAssign?.userPickedAccountId ?? subagentAssign?.pinnedAccountId;
-                const selectedId = subagentPin !== undefined
-                    ? subagentPin
-                    : (pool.preferredRotationFor(req.provider, req.sessionId) ?? null);
+                const selectedId = pool.preferredRotationFor(req.provider, req.sessionId) ?? null;
                 /**
                  * ⚠️ **`selectedPosition` 是客户端要用的那个**（下拉框 value = 位次）。
                  *
@@ -7141,7 +7198,13 @@ function registerJetHubEndpoints(ctx, pool, auths, modelAdapters) {
                  * ⇒ 那时也不下发名字 ⇒ 显示 `位次 N`
                  *（但子代理首轮通常 `selectedPosition` 也是 `null` ⇒ 显示「默认」）。
                  */
-                const isSubagentSessionForBadge = subagentAssign !== undefined;
+                /**
+                 * ⚠️ **判据直接查分配表**（2026-11-25 重构后 `subagentAssign` 变量已删）。
+                 *
+                 * 分配表**只登记子代理** ⇒ 查得到就是子代理。
+                 * 主代理没有记录 ⇒ `undefined` ⇒ 不下发账号名（只显示位次）。
+                 */
+                const isSubagentSessionForBadge = pool.subagentAssignmentOf?.(req.provider, req.sessionId) !== undefined;
                 const selectedAccountName = selectedId === null || !isSubagentSessionForBadge
                     ? undefined
                     : (() => {
@@ -7272,78 +7335,35 @@ function registerJetHubEndpoints(ctx, pool, auths, modelAdapters) {
                 try {
                     await pool.setPreferredRotation(req.provider, req.sessionId, typeof req.position === 'number' ? req.position : null, tierAtSelection);
                     /**
-                     * ★★★ **子代理场景：把用户选择记进分配表**（2026-11-24 用户定 B 方案）。
+                     * ⚠️⚠️ **这里原来有一整段「必须额外写 `userPickedAccountId`」的 JSDoc，
+                     * 已删除**（2026-11-27）。
                      *
-                     * ## 为什么光写 `preferredRotation` 不够
+                     * ## 为什么删
                      *
-                     * 子代理的账号选择有**三级优先级**（见 `credential-resolver.ts`）：
-                     * `userPickedAccountId` > `pinnedAccountId` > `slot` 现算。
+                     * 它描述的是 `ff7cf8f9`（「子代理起点统一为 preferredRotation —— 净删 1422 行」）
+                     * **之前**的三级优先级：
                      *
-                     * 用户在本页面选起点时，`preferredRotation[provider][sid]` 会被写入 ——
-                     * 但 resolver **在 pin 命中时根本不看它**（pin 优先）⇒ 用户的选择
-                     * **静默无效**，弹窗还会立刻变回 pin 的位次（看起来像保存失败）。
+                     * ```
+                     * userPickedAccountId > pinnedAccountId > slot 现算
+                     * ```
                      *
-                     * ⇒ 必须额外写 `userPickedAccountId`（最高优先级）。
+                     * 而重构之后：
                      *
-                     * ## ⚠️ 位次 → 账号 id 的换算口径必须与 resolver 一致
+                     * - `AccountPool` 上**没有** `setUserPickedAccount` / `pinSubagentAccount`；
+                     * - 用户手选**直接写 `preferredRotation`**（就是上面那个 `setPreferredRotation`）；
+                     * - ⇒ 那段「必须额外写 `userPickedAccountId`」的论证**指向一个不存在的动作**。
                      *
-                     * 用 **全量启用账号**（`enabled !== false`，池序 1-based），
-                     * 与 `account.getRotation` 的 `mine`、resolver 的 `enabledIds`
-                     * **逐字同口径** —— 否则用户选「位次 3」，实际生效的是另一个号。
+                     * ## 为什么必须删（不是「留着无害」）
                      *
-                     * ## ⚠️ 非子代理（主代理）不写
+                     * 紧邻的那段注释（**不写行号** —— 它会随改动漂移，写死反而变成新的债）写着正确的话：
                      *
-                     * 主代理没有分配记录，`setUserPickedAccount` 会因
-                     * `assignments[sessionId] === undefined` 而原样返回 ⇒ 无副作用。
+                     * > 「子代理的起点（含「用户手选」）现在**统一存在这里** ——
+                     * >   与主代理同一个地方 ⇒ 不再有 `userPickedAccountId` 这一级」
+                     *
+                     * ⇒ 两段**自相矛盾**的注释挨在一起。这正是本仓反复记录的
+                     *   「同一语义两套说法」的温床：读代码的人无法判断哪份是对的。
+                     *   **过时注释比没有注释更糟。**
                      */
-                    if (typeof req.position === 'number') {
-                        const allForPick = await pool.listAllAccounts();
-                        const pickId = allForPick
-                            .filter((a) => a.provider === req.provider && a.enabled !== false)[req.position - 1]?.id;
-                        /**
-                         * ⚠️⚠️ **位次越界必须报错，不能静默跳过**（2026-11-24 第四轮审计）。
-                         *
-                         * ## 原缺陷
-                         *
-                         * 上一版写的是 `if (pickId !== undefined) { …写… }` —— `pickId` 越界时
-                         * **什么都不做、还回 `ok: true`**。
-                         *
-                         * ## 为什么这很糟
-                         *
-                         * 用户选了「位次 5」而池里只剩 3 个号时：
-                         * 1. `preferredRotation` 已被写入（上面那段）；
-                         * 2. `userPickedAccountId` **没写** ⇒ 子代理仍用旧 pin；
-                         * 3. 界面回 `selected: preferredRotationFor(…)` ⇒ **显示新位次**。
-                         *
-                         * ⇒ **界面说生效了、实际没生效**，且零报错 —— 与「set 了不生效」
-                         *    那类缺陷同形（本 PR 已修过两次同一形态）。
-                         *
-                         * ⚠️ 宁可拒绝这次写入，让用户看到「位次超出范围」，
-                         *    也不接受一个「只写了一半」的部分成功。
-                         */
-                        if (pickId === undefined) {
-                            const enabledCount = allForPick
-                                .filter((a) => a.provider === req.provider && a.enabled !== false).length;
-                            return {
-                                ok: false,
-                                error: {
-                                    code: 'bad-request',
-                                    message: `位次 ${req.position} 超出范围（当前 ${enabledCount} 个启用账号）`,
-                                },
-                            };
-                        }
-                        await pool.setUserPickedAccount?.(req.provider, req.sessionId, pickId);
-                    }
-                    else {
-                        /**
-                         * `position === null` ⇒ 用户点了「恢复默认」⇒ **清除**手动选择
-                         * （回落到 pin 的语义）。
-                         *
-                         * ⚠️ 传 `undefined` 而不是 `''`：与 `setUserPickedAccount` 的
-                         * 「清除」语义对齐（它自己也会把空串归一成清）。
-                         */
-                        await pool.setUserPickedAccount?.(req.provider, req.sessionId, undefined);
-                    }
                 }
                 catch (error) {
                     return {
@@ -7352,17 +7372,16 @@ function registerJetHubEndpoints(ctx, pool, auths, modelAdapters) {
                     };
                 }
                 /**
-                 * ⚠️ 返回值里的 `selected` 必须反映**实际生效**的那个号。
+                 * ⚠️ **返回值直接读 `preferredRotationFor`**（2026-11-25 重构）。
                  *
-                 * 子代理场景下用户刚写的 `userPickedAccountId` 优先级最高
-                 * ⇒ 回传它（而不是 `preferredRotationFor`），否则弹窗会显示
-                 * 「你选了位次 3，但选中态还是位次 5」这种自相矛盾的界面。
+                 * 子代理的起点（含「用户手选」）现在**统一存在这里** ——
+                 * 与主代理同一个地方 ⇒ 不再有 `userPickedAccountId` 这一级
+                 * ⇒ 回传的 `selected` 就是**实际生效**的那个号。
                  */
-                const userPickedNow = pool.subagentAssignmentOf?.(req.provider, req.sessionId)?.userPickedAccountId;
                 return {
                     ok: true,
                     value: {
-                        selected: userPickedNow ?? (pool.preferredRotationFor(req.provider, req.sessionId) ?? null),
+                        selected: pool.preferredRotationFor(req.provider, req.sessionId) ?? null,
                         /** ⚠️ 回传落盘后的档位（客户端据此确认新规则已生效）。 */
                         tierAtSelection: pool.rotationStartTierFor(req.provider, req.sessionId) ?? null,
                     },
@@ -7667,16 +7686,12 @@ function registerJetHubEndpoints(ctx, pool, auths, modelAdapters) {
                         return { ok: true, value: { done: false } };
                     }
                     /**
-                     * ⚠️ 豆包扫码登录（2026-11-03）：与 magicrew 同型 —— `await` 在途任务
-                     * （单飞），表里没有就回 `{done:false}` 交给客户端 5 分钟表收口。
-                     * 豆包占位条目**没有** TTL 收口器：任务结束（成功/失败）时 `failLogin`
-                     * 或判重路径会处理它；宿主重启后表空了 ⇒ 浏览器窗口也没了
-                     * （进程随宿主树退出）⇒ 用户重新点登录即可，占位条目由用户手删。
+                     * 豆包（`mode: 'cookie'`）：导入是一次同步完成的，**不存在**「占位条目
+                     * 在、凭据还没到」的在途形态。走到这里说明那张占位卡是异常残留
+                     * （宿主重启 / 导入中断）⇒ 回 `{done:false}` 让客户端自己的 5 分钟表
+                     * 收口，判据保持"不猜成功也不猜失败"。
                      */
                     if (entry.provider === 'doubao') {
-                        const shared = doubaoLoginInFlight.get(req.accountId);
-                        if (shared !== undefined)
-                            return { ok: true, value: await shared };
                         return { ok: true, value: { done: false } };
                     }
                     return { ok: true, value: { done: false } };
@@ -8247,7 +8262,20 @@ function registerJetHubEndpoints(ctx, pool, auths, modelAdapters) {
                             // ★ per-provider 窗口（2026-11-19）：走 resolveCreditWindow 唯一取值点。
                             // ⚠️ 必须与选号路径同源，否则「面板说临期、选号当短期」。
                             const w = resolveCreditWindow(provider, safeCreditWindowReader(pool));
-                            return { windowDays: w.windowDays, imminentDays: w.imminentDays };
+                            /**
+                             * ★★★ **两个积分阈值必须一起回传**（2026-11-27 上游审计 D2/D5）。
+                             *
+                             * ⚠️ 不回传的后果：客户端拿不到 ⇒ 回落 0 ⇒ **所有客户端档位判据
+                             *   都退化成「阈值关闭」** ⇒ 面板显示与实际选号分叉。
+                             * ⚠️ 与上面两个天数**必须成对**（同一条理由：只给一半会让
+                             *   前端一半按旧口径、一半按新口径）。
+                             */
+                            return {
+                                windowDays: w.windowDays,
+                                imminentDays: w.imminentDays,
+                                imminentFloor: w.imminentFloor,
+                                expiringFloor: w.expiringFloor,
+                            };
                         })()
                         : {}),
                 });
@@ -9201,7 +9229,20 @@ function registerJetHubEndpoints(ctx, pool, auths, modelAdapters) {
                             // ★ per-provider 窗口（2026-11-19）：与选号路径同源（resolveCreditWindow）。
                             ...(() => {
                                 const w = resolveCreditWindow(req.provider, safeCreditWindowReader(pool));
-                                return { windowDays: w.windowDays, imminentDays: w.imminentDays };
+                                /**
+                               * ★★★ **两个积分阈值必须一起回传**（2026-11-27 上游审计 D2/D5）。
+                               *
+                               * ⚠️ 不回传的后果：客户端拿不到 ⇒ 回落 0 ⇒ **所有客户端档位判据
+                               *   都退化成「阈值关闭」** ⇒ 面板显示与实际选号分叉。
+                               * ⚠️ 与上面两个天数**必须成对**（同一条理由：只给一半会让
+                               *   前端一半按旧口径、一半按新口径）。
+                               */
+                                return {
+                                    windowDays: w.windowDays,
+                                    imminentDays: w.imminentDays,
+                                    imminentFloor: w.imminentFloor,
+                                    expiringFloor: w.expiringFloor,
+                                };
                             })(),
                         },
                     };
@@ -9296,16 +9337,35 @@ function registerJetHubEndpoints(ctx, pool, auths, modelAdapters) {
                             // ★ per-provider 窗口（2026-11-19）：与选号路径同源。
                             ...(() => {
                                 const w = resolveCreditWindow(req.provider, safeCreditWindowReader(pool));
-                                return { windowDays: w.windowDays, imminentDays: w.imminentDays };
+                                /**
+                               * ★★★ **两个积分阈值必须一起回传**（2026-11-27 上游审计 D2/D5）。
+                               *
+                               * ⚠️ 不回传的后果：客户端拿不到 ⇒ 回落 0 ⇒ **所有客户端档位判据
+                               *   都退化成「阈值关闭」** ⇒ 面板显示与实际选号分叉。
+                               * ⚠️ 与上面两个天数**必须成对**（同一条理由：只给一半会让
+                               *   前端一半按旧口径、一半按新口径）。
+                               */
+                                return {
+                                    windowDays: w.windowDays,
+                                    imminentDays: w.imminentDays,
+                                    imminentFloor: w.imminentFloor,
+                                    expiringFloor: w.expiringFloor,
+                                };
                             })(),
                         },
                     };
                 }
-                // ⚠️ 2026-11-22 更正：豆包**现在有真实余额端点**了。
-                // `src/doubao-credits.ts` 的 `fetchDoubaoBalanceDetailed` 已改为真读
-                // `POST /alice/commerce/sale/subscription/quota/summary/`（当时实测 200，
-                // 回「活动赠送额度 total_amount:"1,600"」）。故移除旧的「无余额概念 ⇒ 短路空列表」
-                // 逻辑：让豆包走下面的查表分派，面板能读到真实额度。
+                // ⚠️ 2026-11-26 更正：豆包走**额度面板同款接口**，`quota/summary` 那条只是误判。
+                //
+                // 历史两层错误，都已作废：
+                //   1. 2026-11-13 认定「豆包没有余额概念」⇒ 错，面板上有额度；
+                //   2. 2026-11-22 认定 `quota/summary` 能读余额（实测 200，但登录态下 `data` 全空）
+                //      ⇒ 也错，那个端点拿不到读数。
+                //
+                // 真相（抓面板原生请求核对）：余额在
+                //   `POST /alice/commerce/sale/subscription/overview/`（body `{"product_line":"membership"}`）
+                // 的 `data.quota_balance_overview` 里。故 `src/doubao-credits.ts` 的
+                // `fetchDoubaoBalanceDetailed` 改打这条，下面的查表分派直接把真数字带回面板。
                 // 注册表里仍保留 `credits.balance: true`（签到 claimAll 依赖它，两条硬不变式）。
                 // ── 查表分派 ──
                 // ⚠️ 表由 `registerJetHubEndpoints` 从 `auths` 现造（**不是**形参，
@@ -9438,7 +9498,20 @@ function registerJetHubEndpoints(ctx, pool, auths, modelAdapters) {
                         // ★ per-provider 窗口（2026-11-19）：与选号路径同源。
                         ...(() => {
                             const w = resolveCreditWindow(req.provider, safeCreditWindowReader(pool));
-                            return { windowDays: w.windowDays, imminentDays: w.imminentDays };
+                            /**
+                             * ★★★ **两个积分阈值必须一起回传**（2026-11-27 上游审计 D2/D5）。
+                             *
+                             * ⚠️ 不回传的后果：客户端拿不到 ⇒ 回落 0 ⇒ **所有客户端档位判据
+                             *   都退化成「阈值关闭」** ⇒ 面板显示与实际选号分叉。
+                             * ⚠️ 与上面两个天数**必须成对**（同一条理由：只给一半会让
+                             *   前端一半按旧口径、一半按新口径）。
+                             */
+                            return {
+                                windowDays: w.windowDays,
+                                imminentDays: w.imminentDays,
+                                imminentFloor: w.imminentFloor,
+                                expiringFloor: w.expiringFloor,
+                            };
                         })(),
                     }
                     : {
@@ -10123,27 +10196,9 @@ function registerJetHubEndpoints(ctx, pool, auths, modelAdapters) {
                         && catalog.ids.length > 0
                         && catalog.ids.every((id) => after[id] === true);
                     if (coversAll) {
-                        // ⚠️ 本仓改动（2026-11-05）：第三参是「**目标意图**」，**不要**写死 `true`。
-                        //
-                        // `closeProvider: false` 是模型列表屏传的，语义是「只关这家的模型、
-                        // 供应商保持打开」⇒ 对应 `writeModelsWithProviderClosed` 的三态
-                        // `'keep'`（**不动** `providerClosed` 那个键）。
-                        //
-                        // ⚠️ 不能直接传 `false`：`false` 的实现是
-                        // `delete providerClosed[provider]`，会**主动删掉**用户先前用
-                        // 「关闭供应商」设下的意图 —— 与「不动」是两回事（2026-11-04 真机
-                        // 报障：「更新插件后停用的供应商被启用了」，见 `writeModelsWithProviderClosed`
-                        // 里 `'keep'` 那一态的注释）。
-                        //
-                        // ⚠️ 与 `setAllDisabled` 的 `closeProvider` 同一条契约：两个入口写的是
-                        // 同一张黑名单，不给这条就会出现「同一份黑名单状态经两个入口得到不同
-                        // 意图」，随后打开任意模型时又被清掉，状态反向跳变。
-                        const closeProvider = req.closeProvider !== false;
-                        await pool.writeModelsWithProviderClosed(req.provider, ids, closeProvider ? true : 'keep');
+                        await pool.writeModelsWithProviderClosed(req.provider, ids, true);
                         ctx.logger.info(`[jet-hub] ${req.provider} 的黑名单已覆盖全量目录（${catalog.ids.length} 个），`
-                            + (closeProvider
-                                ? '同时落「供应商关闭」意图'
-                                : '不动「供应商关闭」意图（closeProvider: false）'));
+                            + '同时落「供应商关闭」意图');
                     }
                     else {
                         await pool.setModelsDisabled(req.provider, ids);
@@ -11849,6 +11904,15 @@ function registerJetHubEndpoints(ctx, pool, auths, modelAdapters) {
                     imminentDays: resolved.imminentDays,
                     source: resolved.source,
                     clamped: resolved.clamped,
+                    /**
+                     * ★★★ **两个积分阈值必须回传**（2026-11-27 上游审计 D2）。
+                     *
+                     * 不回传的后果（审计实测）：面板回填**恒空** ⇒ 用户看不到自己设过的值；
+                     * 更糟的是「清除」判据依赖它 ⇒ **已存的阈值清不掉**
+                     *（清空/填 0 都不发 payload ⇒ 后端保持原值 ⇒ 面板空着但仍降级）。
+                     */
+                    imminentFloor: resolved.imminentFloor,
+                    expiringFloor: resolved.expiringFloor,
                     // ★ 子代理设置（没配则省略，保持响应形状与改动前一致）
                     ...(() => {
                         const sub = pool.subagentRotationFor(req.provider);
@@ -11869,6 +11933,14 @@ function registerJetHubEndpoints(ctx, pool, auths, modelAdapters) {
                  */
                 const windowRaw = req.windowDays;
                 const imminentRaw = req.imminentDays;
+                /**
+                 * ★★★ **积分阈值**（2026-11-27 用户需求）。
+                 *
+                 * ⚠️ 与窗口天数**共用同一个校验器**（都是「非负有限数字」）——
+                 * 两条独立的校验必然漂移，且这里没有「阈值有别的合法域」可言。
+                 */
+                const imminentFloorRaw = req.imminentFloor;
+                const expiringFloorRaw = req.expiringFloor;
                 const bad = (name, raw) => (raw === undefined || raw === null)
                     ? null
                     : (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0
@@ -11876,12 +11948,32 @@ function registerJetHubEndpoints(ctx, pool, auths, modelAdapters) {
                         : null);
                 const badWindow = bad('windowDays', windowRaw);
                 const badImminent = bad('imminentDays', imminentRaw);
-                const badField = badWindow ?? badImminent;
+                const badImminentFloor = bad('imminentFloor', imminentFloorRaw);
+                const badExpiringFloor = bad('expiringFloor', expiringFloorRaw);
+                const badField = badWindow ?? badImminent ?? badImminentFloor ?? badExpiringFloor;
                 if (badField !== null) {
                     return { ok: false, error: { code: 'bad-request', message: badField } };
                 }
                 const windowDays = windowRaw === undefined || windowRaw === null ? undefined : windowRaw;
                 const imminentDays = imminentRaw === undefined || imminentRaw === null ? undefined : imminentRaw;
+                /**
+                 * ⚠️ **阈值 `0` 与「不传」在语义上不同**：
+                 *
+                 * | 传入 | 含义 |
+                 * |---|---|
+                 * | `undefined` / `null` | **不动**（合并语义，与 windowDays 一致）|
+                 * | **`0`** | **关掉阈值**（用户主动清除）|
+                 * | `> 0` | 设该下限 |
+                 *
+                 * ⇒ `0` 必须能真正写进去，**不能**被归一成 `undefined`（那会让用户
+                 *   **永远关不掉已设的阈值** —— 面板空着、实际还在降级）。
+                 */
+                const imminentFloor = imminentFloorRaw === undefined || imminentFloorRaw === null
+                    ? undefined
+                    : imminentFloorRaw;
+                const expiringFloor = expiringFloorRaw === undefined || expiringFloorRaw === null
+                    ? undefined
+                    : expiringFloorRaw;
                 /**
                  * 合并语义：只传一个字段时另一个**保持原值**（不是清空）。
                  * 两个都不传 ⇒ 整条删键（恢复默认）。
@@ -11907,12 +11999,28 @@ function registerJetHubEndpoints(ctx, pool, auths, modelAdapters) {
                     return { ok: false, error: { code: 'internal', message: '账号池不支持按渠道读取分档窗口，无法安全执行「只改一个字段」的部分更新（另一个字段会被覆盖）。请升级宿主后重试。' } };
                 }
                 const current = safeCreditWindowReader(pool)(req.provider);
-                const next = windowDays === undefined && imminentDays === undefined
-                    ? undefined
-                    : {
+                /**
+                 * ★★★ **两个阈值也参与「是否有窗口改动」的判据**（2026-11-27）。
+                 *
+                 * ⚠️ 若不参与：「只改阈值」的请求会被判成 `next === undefined`
+                 *   ⇒ 与「恢复默认」同形 ⇒ **阈值被静默丢弃**（而且窗口天数被删键）。
+                 *   这正是 2026-11-24 那个「只改子代理设置，窗口天数回归默认」缺陷的
+                 *   同一形态 —— 新增字段时必须回头看这条判据。
+                 */
+                const hasAnyWindowField = windowDays !== undefined || imminentDays !== undefined
+                    || imminentFloor !== undefined || expiringFloor !== undefined;
+                const next = hasAnyWindowField
+                    ? {
                         ...(windowDays === undefined ? current?.windowDays === undefined ? {} : { windowDays: current.windowDays } : { windowDays }),
                         ...(imminentDays === undefined ? current?.imminentDays === undefined ? {} : { imminentDays: current.imminentDays } : { imminentDays }),
-                    };
+                        /**
+                         * ⚠️ 阈值的合并语义与天数**逐字同构**：不传 ⇒ 保持原值。
+                         * ⚠️ 但**没有 `=== 0 就省略`** 那层：`0` 是合法的「关掉」，必须写进去。
+                         */
+                        ...(imminentFloor === undefined ? current?.imminentFloor === undefined ? {} : { imminentFloor: current.imminentFloor } : { imminentFloor }),
+                        ...(expiringFloor === undefined ? current?.expiringFloor === undefined ? {} : { expiringFloor: current.expiringFloor } : { expiringFloor }),
+                    }
+                    : undefined;
                 /**
                  * ⚠️⚠️ **两个天数都没传时的两种语义必须分开**（2026-11-24 真缺陷）。
                  *
@@ -12115,6 +12223,9 @@ function registerJetHubEndpoints(ctx, pool, auths, modelAdapters) {
                     imminentDays: resolved.imminentDays,
                     source: resolved.source,
                     clamped: resolved.clamped,
+                    /** ★ 阈值回传（与 `credits.window.get` 同源，见那里的注释）。 */
+                    imminentFloor: resolved.imminentFloor,
+                    expiringFloor: resolved.expiringFloor,
                     ...(() => {
                         const sub = pool.subagentRotationFor(req.provider);
                         return sub === undefined ? {} : { subagent: sub };
