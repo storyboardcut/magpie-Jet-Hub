@@ -1,9 +1,15 @@
 # 这个目录是什么
 
 [\`@magpie-community/opencode-minimax-auth\`](https://www.npmjs.com/package/@magpie-community/opencode-minimax-auth)
-**0.2.9** 的原样副本（MIT，作者 yetone，仓库 [magpie-community/plugins](https://github.com/magpie-community/plugins)）。
+**0.2.10** 的副本（MIT，作者 yetone，仓库 [magpie-community/plugins](https://github.com/magpie-community/plugins)）。
 
 放在本仓库里是为了**不依赖 npm 存活**：上游哪天停更或下架，这里还有一份能装。
+
+## 已跟进的补丁
+
+| 上游提交 | 版本 | 改了什么 |
+|---|---|---|
+| `83419c3b` | 0.2.10 | **修「账号一夜之间集体掉线」**：刷新令牌只能用一次。旧代码刷新成功后只保留结果 1 分钟，且以「写盘成功」为前提 —— 写盘失败时硬盘上仍留着**已作废**的旧令牌，下一轮刷新再拿它去换，MiniMax 回 `invalid_grant` 把账号登出（社区 Tiemo404 报告过多例）。改后：刷新结果一律保留 **30 天**（`KEEP_RENEWED_MS`），与保存成功与否无关。<br>测试：`tests/t-minimax-refresh-keep.mjs`（8 项断言） |
 
 ## 它提供什么
 
